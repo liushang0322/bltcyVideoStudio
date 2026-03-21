@@ -1,0 +1,11 @@
+{
+  "name": "sora2-video-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --use-env-proxy src/server.js",
+    "start": "node --use-env-proxy src/server.js",
+    "test:simulate": "node scripts/simulate-workbench-flow.mjs"
+  }
+}

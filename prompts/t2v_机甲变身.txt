@@ -1,0 +1,83 @@
+One continuous unbroken cinematic transformation shot, 10 seconds, science-fantasy mecha assembly in extreme free fall, physically coherent, elegant and readable, no cuts.
+
+Main subject:
+An East Asian woman in rapid free fall, smooth pale skin, long black hair, black skintight combat suit, eyes closed at the beginning, solemn expression. Keep the same face, same body proportions, same hairstyle, same outfit silhouette throughout the sequence until armor replaces each body part in order.
+
+Hair realism rule:
+Her hair must behave like real long hair under extreme downward free-fall airflow: the roots stay attached and pulled tightly from the scalp, the hair separates into many fine strands and larger clumps, the strands stream upward with natural drag, flutter, and slight disorder, the ends flick and taper irregularly, never forming stiff ribbons, hard plastic spikes, solid sheets, or frozen shapes. Keep the hair readable and realistic, with motion blur mainly in the background, not smearing the hair into a fake mass.
+
+Final transformed form:
+A full-body streamlined dark mecha exosuit with dense layered mechanical construction, glowing blue energy lines, fully enclosed helmet with transparent or reflective visor, heavy shoulder armor, deployable floating weapon units on the back, premium humanoid mecha plus nano armor design, intricate mechanical locking structure, not soft magical wrapping.
+
+Critical transformation rule:
+The armor must assemble in strict order:
+1. shoulders first
+2. chest and core second
+3. arms and hands third
+4. head and visor fourth
+5. back units fifth
+6. weapon formation last
+
+Do not allow helmet closure before shoulder, chest, and both arms are fully assembled.
+Do not concentrate the transformation only on the head.
+Every major body region must visibly change before the next stage begins.
+Each armor stage must finish clearly before the next armor stage starts.
+
+Setting:
+She falls through dark low-altitude cloud layers above a futuristic war-torn ruin. The sky is gray-blue, never blank white. Below are broken sci-fi structures, shattered debris, smoke columns, scattered fires, and distant burning wreckage. Airflow radiates backward from extreme speed. Dust, sparks, debris motes, and blue energy particles spiral around her in the slipstream.
+
+Lighting and palette:
+Overcast dusk, cold and desaturated, blue-gray and steel-blue palette, restrained highlights, slanted crepuscular rays through clouds, blue electric arcs as dynamic local light, realistic metallic reflections, premium dark cinematic atmosphere.
+
+Lens and image character:
+Panavision C-series look, 35mm lens, f/4, soft cinematic depth of field, IMAX-scale framing, subtle filmic bloom, realistic AAA game CGI mixed with refined oil-paint texture, beautiful and intentional background.
+
+0.0–1.5 seconds
+Camera: medium close shot, rotating gently with the falling body, one smooth descending motion only.
+Action: the woman falls rapidly with eyes closed, hair streaming upward naturally in separated strands and clumps. Blue electric arcs begin around both shoulders only. Two large shoulder armor modules and collar-side armor modules streak in from the rear sides and lock onto both shoulders and upper collar area.
+Important detail: this stage affects only the shoulders and upper collar. The head remains fully uncovered. No helmet, no visor, no face armor yet.
+
+1.5–3.0 seconds
+Camera: smooth drift down to chest level, medium close framing.
+Action: chest armor panels converge and assemble over the sternum and ribcage in layered interlocking plates. A central core locks into place. Blue energy lines ignite from the chest and flow toward the waist.
+Important detail: the head remains uncovered. The face is still visible. No forehead armor, no side helmet, no visor.
+
+3.0–5.0 seconds
+Camera: shift to upper body and arms, medium shot, one smooth tracking move only.
+Action: segmented armor extends from the shoulders down both upper arms. Elbow armor slides into place. Forearm armor wraps and locks. Mechanical gloves cover the hands finger by finger in a precise sequence.
+Important detail: this stage completes both arms and both hands before any head armor appears.
+
+5.0–7.0 seconds
+Camera: push in toward the face, close-up, stable and centered.
+Action: only now does the helmet begin to assemble. Rear head armor rises from behind the skull and wraps forward. Side ear modules close in. Top sensor elements unfold. Just before visor closure, her eyes open for one clear instant and emit bright golden light. Then the visor seals shut in one clean motion.
+Important detail: the helmet begins only after shoulders, chest, arms, and hands are already fully armored.
+
+7.0–8.2 seconds
+Camera: drift to rear three-quarter back view, medium-wide shot.
+Action: back armor opens and deploys four floating mechanical weapon units. They extend outward, unfold, and reposition from behind her back to hover beside her. Her falling posture transitions into a controlled braking posture with blue plasma jets firing downward from the feet.
+Important detail: back deployment starts only after full helmet closure.
+
+8.2–9.0 seconds
+Camera: dramatic low-angle medium shot, stable and readable.
+Action: she stabilizes in midair. The floating units begin weapon assembly. First, the sword hilt and guard lock firmly into her right hand. Her right hand fully closes around the hilt with all five fingers visibly gripping it. Only after the grip is secure does the blade extend forward from the hilt in a sequential mechanical assembly, growing outward away from her hand.
+Important sword rule: the sword must be physically held in the right hand, with the handle aligned naturally to the wrist and forearm. The blade extends away from the hand, never backwards, never sideways, never detached from the grip.
+
+9.0–10.0 seconds
+Camera: low-angle hero shot, slight impact vibration at the beginning, then settles.
+Action: she twists her waist and shoulders into a final controlled combat pose and holds the pose clearly. The completed long blade now glows from blue into blazing orange-red with red electric arcs. She points the sword tip toward the camera while keeping a balanced, strong stance in midair. A circular shockwave erupts from her position, blasting clouds, smoke, and dust outward. The final 0.6–0.8 seconds are a stable pose hold, not a new action.
+Important final pose rule: the ending must include a clean hero pose hold with the full body readable, the sword readable, and the silhouette readable. Do not end during motion. End on a held pose.
+
+Priority controls:
+Maintain one continuous take with no cut points.
+Maintain strict assembly order: shoulders, chest, arms, head, back units, weapon.
+Keep the head uncovered during the first half of the clip.
+Favor mechanical readability over effect noise.
+Favor visible staged body transformation over fast helmet-first transformation.
+Favor realistic hair physics over exaggerated stylized hair shapes.
+Favor correct sword grip and blade direction over flashy weapon effects.
+The final second must prioritize a readable hero pose over additional movement.
+
+Keep the background beautiful: dark cloud gaps, futuristic ruins, smoke, fire, structural debris, not blank sky, not western architecture, not generic fantasy ruins.
+
+Avoid:
+fake hair ribbons, plastic hair spikes, smeared hair mass, helmet appearing too early, head-only transformation, blurry subject, deformed face, unstable anatomy, extra fingers, clipping, armor intersecting body, random armor growth, wrong assembly order, sword forming before the hand grips the hilt, sword pointing in the wrong direction, detached weapon, oversaturated neon colors, cheap glowing effects, empty background, generic cave, western buildings, text, watermark, jump cuts, choppy motion, incorrect eye-glow timing, missing final pose.

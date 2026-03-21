@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sora2Studio</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div class="hero-main">
+          <p class="eyebrow">Sora2Studio</p>
+          <h1>面向 BLTCY 的模型工作台</h1>
+          <p class="hero-copy">
+            把配置、模型能力、素材、任务和结果收在一个界面里。先连接提供商，再按模型真实能力创建图像或视频任务。
+          </p>
+          <div class="hero-pills">
+            <span class="hero-pill">严格模型驱动</span>
+            <span class="hero-pill">任务持久化</span>
+            <span class="hero-pill">素材复用</span>
+          </div>
+        </div>
+        <aside class="hero-side">
+          <div class="hero-side-top">
+            <div class="hero-badge">产品工作台</div>
+            <p class="hero-note">
+              当前页面针对 BLTCY 做了参数收口、任务恢复和错误诊断，不再把不存在的能力伪装成可提交选项。
+            </p>
+          </div>
+          <div class="hero-side-metrics">
+            <div class="metric-card">
+              <span class="metric-label">连接范围</span>
+              <strong>BLTCY / OpenAI Compatible</strong>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">工作方式</span>
+              <strong>模型能力驱动 UI</strong>
+            </div>
+          </div>
+        </aside>
+      </header>
+
+      <main class="page">
+        <section class="workspace-grid">
+          <section class="card card-prep">
+            <div class="section-head">
+              <div>
+                <p class="section-tag">配置</p>
+                <h2>提供商连接</h2>
+              </div>
+              <div class="config-actions">
+                <button id="deleteProfile" type="button" class="secondary-button">删除当前档案</button>
+                <button id="toggleAdvanced" type="button" class="secondary-button">高级设置</button>
+              </div>
+            </div>
+
+            <form id="configForm" class="config-grid">
+              <label for="providerPreset">
+                预设
+                <select id="providerPreset" name="providerPreset"></select>
+              </label>
+              <label for="profileSelect">
+                配置档案
+                <select id="profileSelect" name="profileSelect"></select>
+              </label>
+              <label for="providerLabel">
+                提供商名称
+                <input id="providerLabel" name="providerLabel" placeholder="例如 BLTCY" />
+              </label>
+              <label for="providerType">
+                提供商类型
+                <select id="providerType" name="providerType">
+                  <option value="compatible">OpenAI-Compatible</option>
+                  <option value="openai">OpenAI 官方</option>
+                </select>
+              </label>
+              <label for="baseUrl">
+                Base URL
+                <input id="baseUrl" name="baseUrl" placeholder="例如 https://api.bltcy.ai" />
+              </label>
+              <label for="sora2ApiKey">
+                API Key
+                <input id="sora2ApiKey" name="sora2ApiKey" type="password" placeholder="sk-..." />
+              </label>
+              <label for="proxyUrl">
+                代理地址
+                <input id="proxyUrl" name="proxyUrl" placeholder="可选，例如 http://127.0.0.1:7899" />
+              </label>
+              <label for="outputDir">
+                输出目录
+                <input id="outputDir" name="outputDir" placeholder="例如 workspace-output 或 D:/SoraOutputs" />
+              </label>
+
+              <div id="advancedConfig" class="advanced-config hidden">
+                <div class="advanced-grid">
+                  <label for="modelsPath">
+                    模型列表路径
+                    <input id="modelsPath" name="modelsPath" />
+                  </label>
+                  <label for="imageGeneratePath">
+                    图片生成路径
+                    <input id="imageGeneratePath" name="imageGeneratePath" />
+                  </label>
+                  <label for="videoCreatePath">
+                    视频创建路径
+                    <input id="videoCreatePath" name="videoCreatePath" />
+                  </label>
+                  <label for="videoRetrievePathTemplate">
+                    视频状态路径模板
+                    <input id="videoRetrievePathTemplate" name="videoRetrievePathTemplate" />
+                  </label>
+                  <label for="videoCancelPathTemplate">
+                    视频取消路径模板
+                    <input id="videoCancelPathTemplate" name="videoCancelPathTemplate" />
+                  </label>
+                  <label for="videoContentPathTemplate">
+                    视频内容路径模板
+                    <input id="videoContentPathTemplate" name="videoContentPathTemplate" />
+                  </label>
+                  <label for="videoRequestFormat">
+                    视频请求格式
+                    <select id="videoRequestFormat" name="videoRequestFormat">
+                      <option value="multipart">multipart/form-data</option>
+                      <option value="json">JSON</option>
+                    </select>
+                  </label>
+                  <label for="inputReferenceFormat">
+                    参考图字段格式
+                    <select id="inputReferenceFormat" name="inputReferenceFormat">
+                      <option value="">自动</option>
+                      <option value="string">string</option>
+                      <option value="object">object</option>
+                    </select>
+                  </label>
+                  <label class="toggle-item">
+                    <input id="imageEnabled" name="imageEnabled" type="checkbox" checked />
+                    <span>启用图片能力</span>
+                  </label>
+                  <label class="toggle-item">
+                    <input id="videoEnabled" name="videoEnabled" type="checkbox" checked />
+                    <span>启用视频能力</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="config-actions">
+                <button type="submit">保存提供商配置</button>
+                <button id="checkConnectivity" type="button" class="secondary-button">检测连通性</button>
+                <button id="runDiagnostics" type="button" class="secondary-button">运行完整诊断</button>
+              </div>
+            </form>
+
+            <div id="configStatus" class="status-line">尚未加载配置</div>
+          </section>
+
+          <section class="card">
+            <div class="section-head">
+              <div>
+                <p class="section-tag">模型</p>
+                <h2>模型目录与诊断</h2>
+              </div>
+              <button id="loadModels" type="button">加载模型</button>
+            </div>
+
+            <div id="modelSyncPanel" class="model-sync hidden">
+              <div class="model-sync-top">
+                <strong id="modelSyncTitle">正在准备模型目录</strong>
+                <span id="modelSyncMeta">0 / 0</span>
+              </div>
+              <div class="model-sync-bar">
+                <div id="modelSyncBar" class="model-sync-bar-fill" style="width: 0%"></div>
+              </div>
+              <div id="modelSyncMessage" class="status-line">正在启动…</div>
+            </div>
+
+            <div class="model-panels">
+              <div class="model-panel">
+                <div class="model-panel-title">图片模型</div>
+                <div id="imageModelList" class="model-summary-list"></div>
+              </div>
+              <div class="model-panel">
+                <div class="model-panel-title">视频模型</div>
+                <div id="videoModelList" class="model-summary-list"></div>
+              </div>
+              <div class="model-panel">
+                <div class="model-panel-title">其他模型</div>
+                <div id="otherModelList" class="model-summary-list"></div>
+              </div>
+            </div>
+
+            <div class="diagnostic-grid">
+              <pre id="models">尚未加载模型</pre>
+              <pre id="connectivityStatus">未检测</pre>
+              <pre id="diagnosticsStatus">未诊断</pre>
+            </div>
+          </section>
+        </section>
+
+        <section class="studio-grid">
+          <section class="card builder-card">
+            <div class="section-head">
+              <div>
+                <p class="section-tag">创建</p>
+                <h2>任务创建器</h2>
+              </div>
+            </div>
+
+            <div class="task-context">
+              <div class="section-head">
+                <div>
+                  <p class="section-tag">创作任务</p>
+                  <h3>当前任务上下文</h3>
+                </div>
+                <div class="config-actions">
+                  <input id="studioTaskSearch" type="search" placeholder="搜索任务名称" />
+                  <button id="createStudioTask" type="button" class="secondary-button">新建任务</button>
+                  <button id="editStudioTask" type="button" class="secondary-button">编辑任务</button>
+                  <button id="deleteStudioTask" type="button" class="secondary-button">删除任务</button>
+                </div>
+              </div>
+              <div id="studioTaskStatus" class="status-line">当前任务：Default Task</div>
+              <div id="studioTaskList" class="studio-task-list"></div>
+              <div class="inline-grid">
+                <label for="studioTaskName">
+                  任务名称
+                  <input id="studioTaskName" type="text" readonly />
+                </label>
+                <label for="studioTaskDescription">
+                  任务目标
+                  <textarea id="studioTaskDescription" rows="3" readonly></textarea>
+                </label>
+              </div>
+            </div>
+
+            <form id="createForm" class="create-form">
+              <label for="typeSelect">
+                任务类型
+                <select id="typeSelect" name="type"></select>
+              </label>
+              <label for="prompt">
+                提示词
+                <textarea id="prompt" name="prompt" rows="5" placeholder="描述你想生成的内容"></textarea>
+              </label>
+              <div id="storyboardPanel" class="hidden">
+                <div class="storyboard-shell">
+                  <div class="storyboard-topbar">
+                    <div class="storyboard-heading">
+                      <span class="storyboard-kicker">Sora-2 Storyboard</span>
+                      <h3>分镜工作区</h3>
+                      <p class="storyboard-copy">按镜头组织视频节奏。提交时会自动编译为 `sora-2` 的故事板 prompt。</p>
+                    </div>
+                    <div class="storyboard-actions">
+                      <label for="videoGenerationMode" class="storyboard-mode">
+                        <span>视频模式</span>
+                        <select id="videoGenerationMode" name="videoGenerationMode">
+                          <option value="standard">标准生成</option>
+                          <option value="storyboard">故事板模式</option>
+                        </select>
+                      </label>
+                      <button id="addStoryboardShot" type="button" class="secondary-button">添加镜头</button>
+                    </div>
+                  </div>
+                  <div id="storyboardWorkspace" class="storyboard-stage">
+                    <section class="storyboard-canvas">
+                      <div class="storyboard-note">当前接入的 API 仅支持纯文本故事板提交，不支持参考图、首尾帧或镜头级图片输入。</div>
+                      <div id="storyboardTimeline" class="storyboard-timeline"></div>
+                      <div id="storyboardEditor" class="storyboard-editor"></div>
+                    </section>
+                    <aside class="storyboard-preview-shell">
+                      <div class="storyboard-preview-head">
+                        <strong>提交预览</strong>
+                        <div class="storyboard-copy">右侧内容就是最终发给模型的结构。</div>
+                      </div>
+                      <pre id="storyboardPreview" class="storyboard-preview"></pre>
+                    </aside>
+                  </div>
+                  <label for="storyboardText" class="hidden">
+                    故事板文本
+                    <textarea id="storyboardText" name="storyboardText" rows="8" placeholder=""></textarea>
+                  </label>
+                </div>
+              </div>
+              <label for="negativePrompt">
+                反向提示词
+                <input id="negativePrompt" name="negativePrompt" placeholder="可选，用于限制不希望出现的内容" />
+              </label>
+
+              <div id="imageOptionRow" class="inline-grid">
+                <label id="imageCountWrap" for="imageCount">
+                  生成张数
+                  <input id="imageCount" name="imageCount" type="number" min="1" max="8" step="1" value="1" />
+                </label>
+                <label id="imageQualityWrap" for="imageQuality">
+                  质量等级
+                  <select id="imageQuality" name="imageQuality">
+                    <option value="">自动</option>
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                    <option value="hd">hd</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="inline-grid">
+                <label id="imageModelWrap" for="imageModel">
+                  图片模型
+                  <select id="imageModel" name="imageModel"></select>
+                </label>
+                <label id="videoModelWrap" for="videoModel">
+                  视频模型
+                  <select id="videoModel" name="videoModel"></select>
+                </label>
+              </div>
+
+              <div id="modelCapabilityHint" class="status-line capability-status"></div>
+
+              <div class="inline-grid">
+                <label id="aspectRatioWrap" for="aspectRatio">
+                  画幅比例
+                  <select id="aspectRatio" name="aspectRatio"></select>
+                </label>
+                <label id="imageSizeWrap" for="imageSize">
+                  尺寸档位
+                  <select id="imageSize" name="imageSize"></select>
+                </label>
+              </div>
+
+              <div class="inline-grid">
+                <label for="resolutionPreset">
+                  分辨率预设
+                  <select id="resolutionPreset" name="resolutionPreset"></select>
+                </label>
+                <label for="resolutionInput">
+                  自定义分辨率
+                  <input id="resolutionInput" name="resolution" placeholder="例如 1024x1024 或 1280x720" />
+                </label>
+                <label id="durationWrap" for="duration">
+                  时长（秒）
+                  <input id="duration" name="duration" type="number" step="1" min="1" max="60" placeholder="例如 8" />
+                </label>
+              </div>
+
+              <div class="inline-grid">
+                <label id="sourceImageWrap" for="sourceImageUrl">
+                  源图 URL
+                  <input id="sourceImageUrl" name="sourceImageUrl" placeholder="可选，填写可访问的图片地址" />
+                </label>
+                <label id="referenceImageWrap" for="referenceImageUrl">
+                  参考图 URL
+                  <input id="referenceImageUrl" name="referenceImageUrl" placeholder="可选，用于约束主体或风格" />
+                </label>
+              </div>
+
+              <div class="inline-grid">
+                <label id="sourceAssetWrap" for="sourceAssetSelect">
+                  本地源图
+                  <select id="sourceAssetSelect" name="sourceAssetId">
+                    <option value="">不使用本地图像</option>
+                  </select>
+                </label>
+                <label id="referenceAssetWrap" for="referenceAssetSelect">
+                  本地参考图
+                  <select id="referenceAssetSelect" name="referenceAssetId">
+                    <option value="">不使用本地图像</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="inline-grid">
+                <label id="sourceUploadWrap" for="sourceUploadInput">
+                  上传源图
+                  <input id="sourceUploadInput" type="file" accept="image/*" />
+                </label>
+                <label id="referenceUploadWrap" for="referenceUploadInput">
+                  上传参考图
+                  <input id="referenceUploadInput" type="file" accept="image/*" />
+                </label>
+              </div>
+
+              <div id="endFrameGroup" class="inline-grid hidden">
+                <label id="endFrameImageWrap" for="endFrameImageUrl">
+                  尾帧 URL
+                  <input id="endFrameImageUrl" name="endFrameImageUrl" placeholder="可选，用于约束结束画面" />
+                </label>
+                <label id="endFrameAssetWrap" for="endFrameAssetSelect">
+                  本地尾帧
+                  <select id="endFrameAssetSelect" name="endFrameAssetId">
+                    <option value="">不使用本地图像</option>
+                  </select>
+                </label>
+              </div>
+
+              <div id="endFrameUploadWrap" class="inline-grid hidden">
+                <label for="endFrameUploadInput">
+                  上传尾帧
+                  <input id="endFrameUploadInput" type="file" accept="image/*" />
+                </label>
+              </div>
+
+              <div id="videoAdvancedRow" class="inline-grid hidden">
+                <label id="providerModeWrap" for="providerMode">
+                  生成模式
+                  <select id="providerMode" name="providerMode"></select>
+                </label>
+                <label id="cfgScaleWrap" for="cfgScale">
+                  CFG Scale
+                  <input id="cfgScale" name="cfgScale" type="number" step="0.1" min="0" />
+                </label>
+              </div>
+
+              <div id="cameraControlGroup" class="inline-grid hidden">
+                <label for="cameraControlType">
+                  镜头控制类型
+                  <select id="cameraControlType" name="cameraControlType">
+                    <option value="">不启用</option>
+                    <option value="simple">simple</option>
+                    <option value="down_back">down_back</option>
+                    <option value="forward_up">forward_up</option>
+                    <option value="right_turn_forward">right_turn_forward</option>
+                    <option value="left_turn_forward">left_turn_forward</option>
+                  </select>
+                </label>
+                <label for="cameraControlPan">
+                  Pan
+                  <input id="cameraControlPan" name="cameraControlPan" type="number" min="-10" max="10" step="1" />
+                </label>
+                <label for="cameraControlTilt">
+                  Tilt
+                  <input id="cameraControlTilt" name="cameraControlTilt" type="number" min="-10" max="10" step="1" />
+                </label>
+                <label for="cameraControlZoom">
+                  Zoom
+                  <input id="cameraControlZoom" name="cameraControlZoom" type="number" min="-10" max="10" step="1" />
+                </label>
+              </div>
+
+              <div id="omniInputsGroup" class="inline-grid hidden">
+                <label id="omniImageUrlsWrap" for="omniImageUrls">
+                  Omni 图片列表
+                  <textarea id="omniImageUrls" name="omniImageUrls" rows="4" placeholder="每行一个 URL"></textarea>
+                </label>
+                <label id="omniVideoUrlsWrap" for="omniVideoUrls">
+                  Omni 视频列表
+                  <textarea id="omniVideoUrls" name="omniVideoUrls" rows="4" placeholder="每行一个 URL"></textarea>
+                </label>
+                <label id="elementListWrap" for="elementList">
+                  Element 列表
+                  <textarea id="elementList" name="elementList" rows="4" placeholder="每行一个元素描述"></textarea>
+                </label>
+              </div>
+
+              <div class="inline-grid">
+                <label for="seed">
+                  Seed
+                  <input id="seed" name="seed" type="number" />
+                </label>
+                <label for="styleStrength">
+                  参考强度
+                  <input id="styleStrength" name="styleStrength" type="number" step="0.1" min="0" max="1" placeholder="0 到 1" />
+                </label>
+              </div>
+
+              <button type="submit" class="submit-button">提交任务</button>
+              <div id="submitStatus" class="status-line"></div>
+            </form>
+          </section>
+
+          <aside class="card preview-card-shell">
+            <div class="section-head">
+              <div>
+                <p class="section-tag">预览</p>
+                <h2>当前结果</h2>
+              </div>
+            </div>
+            <div id="previewState" class="empty-state">选择任务后可在这里预览结果，并下载到浏览器或保存到本地目录。</div>
+            <div id="previewCard" class="preview-card hidden">
+              <div id="previewMeta" class="preview-meta"></div>
+              <div id="previewMedia" class="preview-media-frame"></div>
+              <div class="preview-actions">
+                <a id="openRemoteResult" class="secondary-button link-button" target="_blank">浏览器下载</a>
+                <button id="saveLocalResult" type="button">保存到本地</button>
+              </div>
+              <div id="saveStatus" class="status-line"></div>
+            </div>
+          </aside>
+        </section>
+
+        <section class="card calm-card">
+          <div class="section-head">
+            <div>
+              <p class="section-tag">调度</p>
+              <h2>任务节奏与状态</h2>
+            </div>
+            <div class="config-actions">
+              <label class="toggle-item toggle-compact">
+                <input id="autoRefreshToggle" type="checkbox" checked />
+                <span>自动刷新任务</span>
+              </label>
+              <button id="focusLatestTask" type="button" class="secondary-button">定位最新任务</button>
+            </div>
+          </div>
+          <div class="calm-grid">
+            <div class="calm-panel">
+              <div class="calm-title">当前状态</div>
+              <div id="calmStatus" class="calm-copy">等待创建任务</div>
+            </div>
+            <div class="calm-panel">
+              <div class="calm-title">自动刷新</div>
+              <div id="autoRefreshStatus" class="calm-copy">开启后每 15 秒刷新一次任务状态。</div>
+            </div>
+            <div class="calm-panel">
+              <div class="calm-title">最近结果</div>
+              <div id="lastOutcome" class="calm-copy">暂无结果</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="ops-grid">
+          <section class="card">
+            <div class="section-head">
+              <div>
+                <p class="section-tag">素材</p>
+                <h2>本地素材库</h2>
+              </div>
+              <div class="config-actions">
+                <input id="localImageInput" type="file" accept="image/*" />
+                <button id="uploadLocalImage" type="button">上传本地图片</button>
+              </div>
+            </div>
+            <div id="assetLibrary" class="asset-grid"></div>
+          </section>
+
+          <section class="card">
+            <div class="section-head">
+              <div>
+                <p class="section-tag">结果</p>
+                <h2>任务队列</h2>
+              </div>
+              <div class="config-actions">
+                <button id="refresh" type="button" class="secondary-button">刷新任务</button>
+              </div>
+            </div>
+            <div id="studioTaskQueueStatus" class="status-line">当前仅显示所属创作任务下的执行记录。</div>
+            <div id="tasks"></div>
+          </section>
+
+          <section class="card">
+            <div class="section-head">
+              <div>
+                <p class="section-tag">调试</p>
+                <h2>调试日志</h2>
+              </div>
+              <button id="clearDebug" type="button" class="secondary-button">清空日志</button>
+            </div>
+            <pre id="debugPanel" class="debug-panel">暂无日志</pre>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

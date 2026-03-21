@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# Runtime state and local cache
+.sora2studio/
+
+# Generated outputs
+workspace-output/
+
+# Temporary logs
+.tmp-server*.log
+*.log
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+
