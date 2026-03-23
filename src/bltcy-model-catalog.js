@@ -32,6 +32,11 @@ function normalizeKey(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function positiveNumberOrNull(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
 function pickPrimaryPrice(groupPrice = {}) {
   if (!groupPrice || typeof groupPrice !== 'object') return null;
   return groupPrice.default
@@ -319,6 +324,14 @@ function inferTaskCapabilityFallback(model, apiRecords, taskType) {
     : 1;
 
   const supportsSourceImage = taskType === 'image_edit' || taskType === 'image_to_video';
+  const supportsStoryboardPrompt = taskType === 'text_to_video'
+    && /^sora-2$/i.test(modelId);
+  const supportsIntelligentStoryboard = taskType === 'text_to_video'
+    && (
+      /\bshot_type\b|\bintelligence\b|智能分镜|多镜头/.test(lower)
+      || /(^|[-_])omni($|[-_])/.test(id)
+      || /^kling-video-v3/i.test(modelId)
+    );
   const supportsEndFrame = taskType === 'image_to_video'
     && /end.?frame|尾帧|首尾帧/.test(lower);
   const supportsStoryboard = taskType === 'text_to_video'
@@ -343,6 +356,16 @@ function inferTaskCapabilityFallback(model, apiRecords, taskType) {
   const defaultImageSize = imageSizeOptions.find((item) => id.includes(item.toLowerCase())) || imageSizeOptions[0] || '';
   const defaultResolution = resolutionPresets[0] || '';
   const defaultAspectRatio = aspectRatioOptions[0] || '';
+  const roleCaps = deriveTaskRoleCapabilityFields(taskType, {
+    supportsSourceImage,
+    supportsReferenceImage,
+    supportsStoryboardPrompt,
+    supportsIntelligentStoryboard,
+    supportsEndFrame,
+    supportsElements: false,
+    supportsOmniImageList: false,
+    supportsOmniVideoList: false
+  });
 
   return {
     taskType,
@@ -374,8 +397,11 @@ function inferTaskCapabilityFallback(model, apiRecords, taskType) {
     supportsReferenceImage,
     supportsMultipleReferenceImages,
     maxReferenceImages,
+    supportsStoryboardPrompt,
+    supportsIntelligentStoryboard,
     supportsStoryboard,
     supportsEndFrame,
+    ...roleCaps,
     supportsImageCount,
     maxImageCount,
     qualityOptions,
@@ -383,6 +409,29 @@ function inferTaskCapabilityFallback(model, apiRecords, taskType) {
     rawSignals: {
       inferredFromMetadata: true
     }
+  };
+}
+
+function deriveTaskRoleCapabilityFields(taskType, capability = {}) {
+  const isTextToImage = taskType === 'text_to_image';
+  const isImageEdit = taskType === 'image_edit';
+  const isTextToVideo = taskType === 'text_to_video';
+  const isImageToVideo = taskType === 'image_to_video';
+
+  return {
+    supportsPrimaryImageInput: Boolean(
+      (isImageEdit && capability.supportsSourceImage)
+      || (isImageToVideo && (capability.supportsSourceImage || capability.supportsReferenceImage))
+      || (!isTextToImage && !isTextToVideo && capability.supportsSourceImage)
+    ),
+    supportsImageEditSourceImage: Boolean(isImageEdit && capability.supportsSourceImage),
+    supportsImageToVideoFirstFrame: Boolean(isImageToVideo && (capability.supportsSourceImage || capability.supportsReferenceImage)),
+    supportsImageToVideoReferenceImages: Boolean(isImageToVideo && capability.supportsReferenceImage),
+    supportsImageToVideoEndFrame: Boolean(isImageToVideo && capability.supportsEndFrame),
+    supportsTextToImageReferenceImages: Boolean(isTextToImage && capability.supportsReferenceImage),
+    supportsTextToVideoReferenceImages: Boolean(isTextToVideo && capability.supportsReferenceImage),
+    supportsOmniInputs: Boolean(isTextToVideo && (capability.supportsElements || capability.supportsOmniImageList || capability.supportsOmniVideoList)),
+    supportsStructuredVideoMode: Boolean(isTextToVideo && (capability.supportsStoryboardPrompt || capability.supportsIntelligentStoryboard))
   };
 }
 
@@ -409,13 +458,14 @@ function mergeCapabilityDetail(primary = {}, fallback = {}) {
   const imageSizeOptions = uniqueStrings([...(fallback.imageSizeOptions || []), ...(primary.imageSizeOptions || [])]);
   const qualityOptions = uniqueStrings([...(fallback.qualityOptions || []), ...(primary.qualityOptions || [])]);
   const providerModeOptions = uniqueStrings([...(fallback.providerModeOptions || []), ...(primary.providerModeOptions || [])]);
+  const providerModeLabel = String(primary.providerModeLabel || fallback.providerModeLabel || '');
   const supportsDuration = Boolean(primary.supportsDuration || fallback.supportsDuration || durationOptions.length);
   const supportsAspectRatio = Boolean(primary.supportsAspectRatio || fallback.supportsAspectRatio || aspectRatioOptions.length);
   const normalizedSizeField = imageSizeOptions.length > 0
     ? 'image_size'
     : (primary.sizeField || fallback.sizeField || 'size');
 
-  return {
+  const merged = {
     ...fallback,
     ...primary,
     supportedTasks,
@@ -423,11 +473,14 @@ function mergeCapabilityDetail(primary = {}, fallback = {}) {
     supportsReferenceImage: Boolean(primary.supportsReferenceImage || fallback.supportsReferenceImage),
     supportsMultipleReferenceImages: Boolean(primary.supportsMultipleReferenceImages || fallback.supportsMultipleReferenceImages),
     maxReferenceImages: Math.max(Number(primary.maxReferenceImages || 0), Number(fallback.maxReferenceImages || 0)) || null,
+    supportsStoryboardPrompt: Boolean(primary.supportsStoryboardPrompt || fallback.supportsStoryboardPrompt),
+    supportsIntelligentStoryboard: Boolean(primary.supportsIntelligentStoryboard || fallback.supportsIntelligentStoryboard),
     supportsStoryboard: Boolean(primary.supportsStoryboard || fallback.supportsStoryboard),
     supportsEndFrame: Boolean(primary.supportsEndFrame || fallback.supportsEndFrame),
     supportsNegativePrompt: Boolean(primary.supportsNegativePrompt || fallback.supportsNegativePrompt),
     supportsProviderMode: Boolean(primary.supportsProviderMode || fallback.supportsProviderMode || providerModeOptions.length),
     providerModeOptions,
+    providerModeLabel,
     supportsCfgScale: Boolean(primary.supportsCfgScale || fallback.supportsCfgScale),
     promptMaxLength: positiveNumberOrNull(primary.promptMaxLength) ?? positiveNumberOrNull(fallback.promptMaxLength),
     supportsElements: Boolean(primary.supportsElements || fallback.supportsElements),
@@ -436,6 +489,7 @@ function mergeCapabilityDetail(primary = {}, fallback = {}) {
     supportsImageCount: Boolean(primary.supportsImageCount || fallback.supportsImageCount),
     maxImageCount: Math.max(Number(primary.maxImageCount || 0), Number(fallback.maxImageCount || 0)) || null,
     supportsCameraControl: Boolean(primary.supportsCameraControl || fallback.supportsCameraControl),
+    supportsDirectionalCameraControls: Boolean(primary.supportsDirectionalCameraControls || fallback.supportsDirectionalCameraControls),
     supportsEnhancePrompt: Boolean(primary.supportsEnhancePrompt || fallback.supportsEnhancePrompt),
     supportsMovementAmplitude: Boolean(primary.supportsMovementAmplitude || fallback.supportsMovementAmplitude),
     supportsBgm: Boolean(primary.supportsBgm || fallback.supportsBgm),
@@ -456,6 +510,10 @@ function mergeCapabilityDetail(primary = {}, fallback = {}) {
     qualityOptions,
     requestFormat: primary.requestFormat || fallback.requestFormat || 'json',
     notes: primary.notes && !String(primary.notes).startsWith('Failed to load') ? primary.notes : (fallback.notes || primary.notes || '')
+  };
+  return {
+    ...merged,
+    ...deriveTaskRoleCapabilityFields(primary.taskType || fallback.taskType, merged)
   };
 }
 
@@ -491,31 +549,6 @@ export function upgradeCatalogEntry(entry = {}) {
       nextTaskCapabilities[taskType].supportsEndFrame = false;
     }
   }
-  if (sourceModel.key === 'sora-2') {
-    if (nextTaskCapabilities.text_to_video) {
-      nextTaskCapabilities.text_to_video.requestFormat = 'json';
-      nextTaskCapabilities.text_to_video.supportsStoryboard = true;
-      nextTaskCapabilities.text_to_video.supportsReferenceImage = false;
-    }
-    if (nextTaskCapabilities.image_to_video) {
-      nextTaskCapabilities.image_to_video.requestFormat = 'json';
-      nextTaskCapabilities.image_to_video.supportsSourceImage = true;
-      nextTaskCapabilities.image_to_video.supportsReferenceImage = false;
-      nextTaskCapabilities.image_to_video.supportsEndFrame = false;
-    }
-  }
-  if (sourceModel.key === 'sora-2-pro') {
-    if (nextTaskCapabilities.text_to_video) {
-      nextTaskCapabilities.text_to_video.requestFormat = 'json';
-      nextTaskCapabilities.text_to_video.supportsReferenceImage = false;
-    }
-    if (nextTaskCapabilities.image_to_video) {
-      nextTaskCapabilities.image_to_video.requestFormat = 'json';
-      nextTaskCapabilities.image_to_video.supportsSourceImage = true;
-      nextTaskCapabilities.image_to_video.supportsReferenceImage = false;
-      nextTaskCapabilities.image_to_video.supportsEndFrame = false;
-    }
-  }
   if (/^kling-video/i.test(String(sourceModel.key || ''))) {
     for (const [taskType, capability] of Object.entries(nextTaskCapabilities)) {
       if (!capability) continue;
@@ -525,11 +558,13 @@ export function upgradeCatalogEntry(entry = {}) {
       capability.providerModeOptions = Array.isArray(capability.providerModeOptions) && capability.providerModeOptions.length
         ? capability.providerModeOptions
         : ['std', 'pro'];
-      capability.supportsCfgScale = true;
+      capability.providerModeLabel = '生成等级';
+      capability.supportsCfgScale = false;
       capability.supportsNegativePrompt = true;
       if (taskType === 'text_to_video') {
         capability.supportsReferenceImage = false;
         capability.supportsCameraControl = true;
+        capability.supportsDirectionalCameraControls = !/-omni/i.test(String(sourceModel.key || ''));
       }
       if (taskType === 'image_to_video') {
         capability.supportsSourceImage = true;
@@ -537,13 +572,35 @@ export function upgradeCatalogEntry(entry = {}) {
         capability.supportsMultipleReferenceImages = true;
         capability.maxReferenceImages = Math.max(Number(capability.maxReferenceImages || 0), 4) || 4;
         capability.supportsEndFrame = !/v1-5/i.test(String(sourceModel.key || ''));
+        capability.supportsDirectionalCameraControls = false;
       }
       if (/-omni|multi-elements/i.test(String(sourceModel.key || ''))) {
         capability.supportsElements = true;
         capability.supportsOmniImageList = true;
         capability.supportsOmniVideoList = true;
       }
+      if (taskType === 'text_to_video' && (/^kling-video-v3/i.test(String(sourceModel.key || '')) || /(^|[-_])omni($|[-_])/i.test(String(sourceModel.key || '')))) {
+        capability.supportsIntelligentStoryboard = true;
+      }
     }
+  }
+  for (const [taskType, capability] of Object.entries(nextTaskCapabilities)) {
+    if (!capability) continue;
+    if ((taskType === 'text_to_video' || taskType === 'image_to_video') && capability.supportsDuration !== true) {
+      const sourceKey = String(sourceModel.key || '');
+      const endpoint = String(capability.endpoint || '');
+      if (
+        /^kling-video/i.test(sourceKey)
+        || /^veo/i.test(sourceKey)
+        || /^sora/i.test(sourceKey)
+        || /seedance/i.test(sourceKey)
+        || /^volcv-v1$/i.test(sourceKey)
+        || /\/videos\//i.test(endpoint)
+      ) {
+        capability.supportsDuration = true;
+      }
+    }
+    Object.assign(capability, deriveTaskRoleCapabilityFields(taskType, capability));
   }
   const mergedCapabilities = mergeTaskCapabilities(Object.values(nextTaskCapabilities));
   if (!mergedCapabilities.supportedTasks.length) mergedCapabilities.supportedTasks = tasks;
@@ -592,9 +649,24 @@ function buildTaskCapability(apiRecord, html) {
   const supportsEndFrame = apiName.includes('首尾帧');
   const supportsImageCount = /\bn\b|生成数量|图片数量/.test(lowerText) && taskType === 'text_to_image';
 
+  const supportsStoryboardPrompt = taskType === 'text_to_video'
+    && /storyboard|故事板/.test(lowerText + ' ' + apiNameLower)
+    && /sora/.test(lowerText + ' ' + apiNameLower);
+  const supportsIntelligentStoryboard = taskType === 'text_to_video'
+    && /shot_type|intelligence|智能分镜|多镜头/.test(lowerText + ' ' + apiNameLower);
   const durationOptions = parseDurationOptions(`${relevantHtml} ${relevantText}`);
   const aspectRatioOptions = parseAspectRatioOptions(`${relevantHtml} ${relevantText}`);
   const resolutionOptions = parseResolutionOptions(`${relevantHtml} ${relevantText}`);
+  const roleCaps = deriveTaskRoleCapabilityFields(taskType, {
+    supportsSourceImage,
+    supportsReferenceImage,
+    supportsStoryboardPrompt,
+    supportsIntelligentStoryboard,
+    supportsEndFrame,
+    supportsElements: false,
+    supportsOmniImageList: false,
+    supportsOmniVideoList: false
+  });
 
   return {
     taskType,
@@ -617,8 +689,11 @@ function buildTaskCapability(apiRecord, html) {
     supportsBgm,
     supportsSourceImage,
     supportsReferenceImage,
+    supportsStoryboardPrompt,
+    supportsIntelligentStoryboard,
     supportsStoryboard,
     supportsEndFrame,
+    ...roleCaps,
     supportsImageCount,
     maxImageCount: supportsImageCount ? 8 : null,
     notes: relevantText.slice(0, 1200),
@@ -634,19 +709,32 @@ function mergeTaskCapabilities(capabilities) {
     supportedTasks: [],
     supportsSourceImage: false,
     supportsReferenceImage: false,
+    supportsPrimaryImageInput: false,
+    supportsImageEditSourceImage: false,
+    supportsImageToVideoFirstFrame: false,
+    supportsImageToVideoReferenceImages: false,
+    supportsImageToVideoEndFrame: false,
+    supportsTextToImageReferenceImages: false,
+    supportsTextToVideoReferenceImages: false,
+    supportsStoryboardPrompt: false,
+    supportsIntelligentStoryboard: false,
+    supportsStructuredVideoMode: false,
     supportsStoryboard: false,
     supportsEndFrame: false,
     supportsNegativePrompt: false,
     supportsProviderMode: false,
     providerModeOptions: [],
+    providerModeLabel: '',
     supportsCfgScale: false,
     promptMaxLength: null,
     supportsElements: false,
     supportsOmniImageList: false,
     supportsOmniVideoList: false,
+    supportsOmniInputs: false,
     supportsImageCount: false,
     maxImageCount: null,
     supportsCameraControls: false,
+    supportsDirectionalCameraControls: false,
     supportsPromptOptimize: false,
     supportsDuration: false,
     durationOptions: [],
@@ -672,6 +760,16 @@ function mergeTaskCapabilities(capabilities) {
     merged.supportedTasks.push(capability.taskType);
     merged.supportsSourceImage ||= capability.supportsSourceImage;
     merged.supportsReferenceImage ||= capability.supportsReferenceImage;
+    merged.supportsPrimaryImageInput ||= capability.supportsPrimaryImageInput;
+    merged.supportsImageEditSourceImage ||= capability.supportsImageEditSourceImage;
+    merged.supportsImageToVideoFirstFrame ||= capability.supportsImageToVideoFirstFrame;
+    merged.supportsImageToVideoReferenceImages ||= capability.supportsImageToVideoReferenceImages;
+    merged.supportsImageToVideoEndFrame ||= capability.supportsImageToVideoEndFrame;
+    merged.supportsTextToImageReferenceImages ||= capability.supportsTextToImageReferenceImages;
+    merged.supportsTextToVideoReferenceImages ||= capability.supportsTextToVideoReferenceImages;
+    merged.supportsStoryboardPrompt ||= capability.supportsStoryboardPrompt;
+    merged.supportsIntelligentStoryboard ||= capability.supportsIntelligentStoryboard;
+    merged.supportsStructuredVideoMode ||= capability.supportsStructuredVideoMode;
     merged.supportsStoryboard ||= capability.supportsStoryboard;
     merged.supportsEndFrame ||= capability.supportsEndFrame;
     merged.supportsNegativePrompt ||= capability.supportsNegativePrompt;
@@ -680,8 +778,10 @@ function mergeTaskCapabilities(capabilities) {
     merged.supportsElements ||= capability.supportsElements;
     merged.supportsOmniImageList ||= capability.supportsOmniImageList;
     merged.supportsOmniVideoList ||= capability.supportsOmniVideoList;
+    merged.supportsOmniInputs ||= capability.supportsOmniInputs;
     merged.supportsImageCount ||= capability.supportsImageCount;
     merged.supportsCameraControls ||= capability.supportsCameraControl;
+    merged.supportsDirectionalCameraControls ||= capability.supportsDirectionalCameraControls;
     merged.supportsPromptOptimize ||= capability.supportsEnhancePrompt;
     merged.supportsDuration ||= capability.supportsDuration;
     merged.supportsAspectRatio ||= capability.supportsAspectRatio;
@@ -928,6 +1028,15 @@ function rebuildCatalogFromDisk(payload) {
     docs: payload?.docs || {},
     models
   };
+}
+
+export async function getBltcyModelCatalogFromDisk(modelIds = null) {
+  const disk = await loadDiskCache();
+  if (!disk) return null;
+  const rebuilt = rebuildCatalogFromDisk(disk);
+  const targetIds = normalizeModelIdSet(modelIds);
+  if (!hasCatalogCoverage(rebuilt, targetIds)) return rebuilt;
+  return rebuilt;
 }
 
 export async function getBltcyModelCatalog(modelIds = null) {

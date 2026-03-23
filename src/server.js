@@ -2,16 +2,18 @@ import http from 'node:http';
 import { existsSync } from 'node:fs';
 import { createWriteStream } from 'node:fs';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { basename, extname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { BASE_PORT, DEFAULT_OUTPUT_DIR, PROVIDER_PRESETS, TASK_TYPE_DEFINITIONS, TASK_TYPE_SET } from './app-config.js';
-import { getBltcyCatalogEntry, upgradeCatalogEntry } from './bltcy-model-catalog.js';
+import { getBltcyCatalogEntry, getBltcyModelCatalogFromDisk, upgradeCatalogEntry } from './bltcy-model-catalog.js';
 import {
   checkConnectivity,
   createImage,
   createVideoTask,
+  getPublicRuntimeConfig,
   getPersistableRuntimeConfig,
   optimizePromptWithModel,
   getSora2RuntimeConfig,
@@ -62,6 +64,10 @@ const modelCapabilityCache = {
 };
 const MODEL_CACHE_DIR = resolve(process.cwd(), '.sora2studio', 'catalog');
 const MODEL_LIST_CACHE_FILE = join(MODEL_CACHE_DIR, 'runtime-models.json');
+const ENTRY_FILE = fileURLToPath(import.meta.url);
+const WORKSPACE_ROOT = resolve(process.cwd());
+const STORAGE_ROOT = resolve(process.cwd(), '.sora2studio');
+const DEFAULT_DOWNLOAD_HOST_ALLOWLIST = ['api.bltcy.ai', 'cdn.bltcy.ai', 'files.bltcy.ai'];
 const modelSyncState = {
   running: false,
   startedAt: 0,
@@ -71,12 +77,118 @@ const modelSyncState = {
   total: 0,
   current: '',
   error: '',
-  modelsCount: 0
+  modelsCount: 0,
+  mode: 'cache',
+  source: 'runtime-cache'
 };
 
 function json(res, statusCode, data) {
   res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(data));
+}
+
+function publicConfig() {
+  return getPublicRuntimeConfig();
+}
+
+function isSafeWorkspacePath(filePath, rootDir = STORAGE_ROOT) {
+  const target = resolve(String(filePath || ''));
+  const root = resolve(rootDir);
+  return target === root || target.startsWith(`${root}\\`) || target.startsWith(`${root}/`);
+}
+
+function sanitizeAbsolutePathForClient(filePath) {
+  if (!filePath || !isSafeWorkspacePath(filePath, WORKSPACE_ROOT)) return '';
+  return filePath;
+}
+
+function sanitizeAssetForClient(asset = {}) {
+  return {
+    id: asset.id,
+    kind: asset.kind,
+    source: asset.source,
+    mimeType: asset.mimeType,
+    originalName: asset.originalName || '',
+    taskId: asset.taskId || null,
+    createdAt: asset.createdAt || null,
+    hasFile: Boolean(asset.filePath && isSafeWorkspacePath(asset.filePath)),
+    path: sanitizeAbsolutePathForClient(asset.filePath)
+  };
+}
+
+function sanitizeSavedAsset(saved = {}) {
+  return {
+    kind: saved.kind,
+    fileName: saved.fileName || '',
+    mimeType: saved.mimeType || 'application/octet-stream',
+    path: sanitizeAbsolutePathForClient(saved.path || '')
+  };
+}
+
+function sanitizeTaskForClient(task = {}) {
+  return {
+    ...task,
+    savedAssets: Array.isArray(task.savedAssets) ? task.savedAssets.map((item) => sanitizeSavedAsset(item)) : []
+  };
+}
+
+function getDownloadHostAllowlist() {
+  const configured = String(process.env.ALLOWED_DOWNLOAD_HOSTS || '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  const allowlist = new Set(configured.length ? configured : DEFAULT_DOWNLOAD_HOST_ALLOWLIST);
+  try {
+    const baseHost = new URL(getSora2RuntimeConfig().baseUrl).hostname.toLowerCase();
+    if (baseHost) allowlist.add(baseHost);
+  } catch {
+    // Ignore invalid runtime baseUrl when building the allowlist.
+  }
+  return allowlist;
+}
+
+function validateRemoteAssetUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    const error = new Error('资源地址不是合法 URL。');
+    error.code = 'INVALID_ASSET_URL';
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const protocol = parsed.protocol.toLowerCase();
+  if (protocol !== 'https:' && protocol !== 'http:') {
+    const error = new Error('仅允许下载 http/https 资源。');
+    error.code = 'INVALID_ASSET_URL';
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (
+    host === 'localhost'
+    || host.endsWith('.localhost')
+    || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)
+    || host.includes(':')
+  ) {
+    const error = new Error('不允许下载本地或内网资源。');
+    error.code = 'ASSET_URL_BLOCKED';
+    error.statusCode = 403;
+    throw error;
+  }
+
+  if (!getDownloadHostAllowlist().has(host)) {
+    const error = new Error(`当前只允许下载受信任域名资源：${host}`);
+    error.code = 'ASSET_URL_BLOCKED';
+    error.statusCode = 403;
+    throw error;
+  }
+
+  return parsed.toString();
 }
 
 function updateModelSyncState(patch = {}) {
@@ -115,7 +227,7 @@ function pickCatalogCaps(input = {}) {
   const durationOptions = Array.isArray(input.durationOptions) ? input.durationOptions.slice(0, 12) : [];
   const minDuration = positiveNumberOrNull(input.minDuration);
   const maxDuration = positiveNumberOrNull(input.maxDuration);
-  const supportsDuration = Boolean(input.supportsDuration && (durationOptions.length > 0 || minDuration !== null || maxDuration !== null));
+  const supportsDuration = Boolean(input.supportsDuration || durationOptions.length > 0 || minDuration !== null || maxDuration !== null);
   const resolutionPresets = Array.isArray(input.resolutionPresets) ? input.resolutionPresets.slice(0, 16) : [];
   const imageSizeOptions = Array.isArray(input.imageSizeOptions) ? input.imageSizeOptions.slice(0, 8) : [];
   const sizeField = typeof input.sizeField === 'string' ? input.sizeField : 'size';
@@ -126,11 +238,14 @@ function pickCatalogCaps(input = {}) {
     supportsReferenceImage: Boolean(input.supportsReferenceImage),
     supportsMultipleReferenceImages: Boolean(input.supportsMultipleReferenceImages),
     maxReferenceImages: positiveNumberOrNull(input.maxReferenceImages),
+    supportsStoryboardPrompt: Boolean(input.supportsStoryboardPrompt ?? input.supportsStoryboard),
+    supportsIntelligentStoryboard: Boolean(input.supportsIntelligentStoryboard),
     supportsStoryboard: Boolean(input.supportsStoryboard),
     supportsEndFrame: Boolean(input.supportsEndFrame),
     supportsNegativePrompt: Boolean(input.supportsNegativePrompt),
     supportsProviderMode: Boolean(input.supportsProviderMode),
     providerModeOptions: Array.isArray(input.providerModeOptions) ? input.providerModeOptions.slice(0, 8) : [],
+    providerModeLabel: typeof input.providerModeLabel === 'string' ? input.providerModeLabel : '',
     supportsCfgScale: Boolean(input.supportsCfgScale),
     promptMaxLength: positiveNumberOrNull(input.promptMaxLength),
     supportsElements: Boolean(input.supportsElements),
@@ -139,6 +254,7 @@ function pickCatalogCaps(input = {}) {
     supportsImageCount: Boolean(input.supportsImageCount),
     maxImageCount: positiveNumberOrNull(input.maxImageCount),
     supportsCameraControls: Boolean(input.supportsCameraControls ?? input.supportsCameraControl),
+    supportsDirectionalCameraControls: Boolean(input.supportsDirectionalCameraControls ?? input.supportsCameraControls ?? input.supportsCameraControl),
     supportsPromptOptimize: Boolean(input.supportsPromptOptimize),
     supportsDuration,
     durationOptions,
@@ -156,6 +272,84 @@ function pickCatalogCaps(input = {}) {
     qualityOptions: Array.isArray(input.qualityOptions) ? input.qualityOptions.slice(0, 12) : [],
     promptOptimizePath: typeof input.promptOptimizePath === 'string' ? input.promptOptimizePath : '',
     chatCompletionsPath: typeof input.chatCompletionsPath === 'string' ? input.chatCompletionsPath : ''
+  };
+}
+
+function getProviderCapabilityPolicy() {
+  const config = getSora2RuntimeConfig();
+  return {
+    supportsStoryboardPrompt: config?.providerCapabilities?.supportsStoryboardPrompt !== false,
+    supportsNativeKlingVideoRoutes: config?.providerCapabilities?.supportsNativeKlingVideoRoutes !== false,
+    supportsKlingOmniVideo: config?.providerCapabilities?.supportsKlingOmniVideo !== false,
+    supportsKlingMultiImageToVideo: config?.providerCapabilities?.supportsKlingMultiImageToVideo !== false,
+    supportsKlingIntelligentStoryboardInput: config?.providerCapabilities?.supportsKlingIntelligentStoryboardInput === true
+  };
+}
+
+function applyProviderCapabilityPolicy(modelId, taskType, caps = {}) {
+  const providerPolicy = getProviderCapabilityPolicy();
+  const normalizedModelId = String(modelId || '').trim().toLowerCase();
+  const isKlingVideo = /^kling-video/.test(normalizedModelId);
+  const effective = {
+    ...caps,
+    supportsStoryboardPrompt: Boolean(caps.supportsStoryboardPrompt ?? caps.supportsStoryboard),
+    supportsIntelligentStoryboard: Boolean(caps.supportsIntelligentStoryboard),
+    supportsStoryboard: Boolean(caps.supportsStoryboardPrompt ?? caps.supportsStoryboard)
+  };
+
+  if (!providerPolicy.supportsStoryboardPrompt) {
+    effective.supportsStoryboardPrompt = false;
+    effective.supportsStoryboard = false;
+  }
+  if (isKlingVideo && !providerPolicy.supportsNativeKlingVideoRoutes) {
+    effective.supportsElements = false;
+    effective.supportsOmniImageList = false;
+    effective.supportsOmniVideoList = false;
+    effective.supportsEndFrame = false;
+    effective.supportsIntelligentStoryboard = false;
+    effective.supportsDirectionalCameraControls = false;
+  }
+  if (isKlingVideo && !providerPolicy.supportsKlingOmniVideo && taskType === 'text_to_video') {
+    effective.supportsElements = false;
+    effective.supportsOmniImageList = false;
+    effective.supportsOmniVideoList = false;
+  }
+  if (isKlingVideo && !providerPolicy.supportsKlingMultiImageToVideo && taskType === 'image_to_video') {
+    effective.supportsMultipleReferenceImages = false;
+    effective.maxReferenceImages = positiveNumberOrNull(effective.maxReferenceImages) ?? 1;
+  }
+  if (isKlingVideo && !providerPolicy.supportsKlingIntelligentStoryboardInput) {
+    effective.supportsIntelligentStoryboard = false;
+  }
+  if (/omni/i.test(normalizedModelId)) {
+    effective.supportsDirectionalCameraControls = false;
+  }
+
+  return effective;
+}
+
+function deriveTaskRoleCapabilities(taskType, caps = {}) {
+  const isTextToImage = taskType === 'text_to_image';
+  const isImageEdit = taskType === 'image_edit';
+  const isTextToVideo = taskType === 'text_to_video';
+  const isImageToVideo = taskType === 'image_to_video';
+  const supportsPrimaryImageInput = Boolean(
+    (isImageEdit && caps.supportsSourceImage)
+    || (isImageToVideo && (caps.supportsSourceImage || caps.supportsReferenceImage))
+    || (!isTextToImage && !isTextToVideo && caps.supportsSourceImage)
+  );
+
+  return {
+    ...caps,
+    supportsPrimaryImageInput,
+    supportsImageEditSourceImage: Boolean(isImageEdit && caps.supportsSourceImage),
+    supportsImageToVideoFirstFrame: Boolean(isImageToVideo && (caps.supportsSourceImage || caps.supportsReferenceImage)),
+    supportsImageToVideoReferenceImages: Boolean(isImageToVideo && caps.supportsReferenceImage),
+    supportsImageToVideoEndFrame: Boolean(isImageToVideo && caps.supportsEndFrame),
+    supportsTextToImageReferenceImages: Boolean(isTextToImage && caps.supportsReferenceImage),
+    supportsTextToVideoReferenceImages: Boolean(isTextToVideo && caps.supportsReferenceImage),
+    supportsOmniInputs: Boolean(isTextToVideo && (caps.supportsElements || caps.supportsOmniImageList || caps.supportsOmniVideoList)),
+    supportsStructuredVideoMode: Boolean(isTextToVideo && (caps.supportsStoryboardPrompt || caps.supportsIntelligentStoryboard))
   };
 }
 
@@ -200,13 +394,19 @@ function sanitizeModelListResponse(models = {}) {
   };
 }
 
+function getCatalogSupportedTasks(model = {}) {
+  const fromCaps = Array.isArray(model?.catalog?.capabilities?.supportedTasks)
+    ? model.catalog.capabilities.supportedTasks.filter(Boolean)
+    : [];
+  if (fromCaps.length) return fromCaps;
+  return Object.keys(model?.catalog?.taskCapabilities || {}).filter(Boolean);
+}
+
 function isStudioModelAllowed(model = {}) {
   const provider = String(model?.provider || '').trim().toLowerCase();
   if (!STUDIO_ALLOWED_PROVIDERS.has(provider)) return false;
 
-  const supportedTasks = Array.isArray(model?.catalog?.capabilities?.supportedTasks)
-    ? model.catalog.capabilities.supportedTasks
-    : [];
+  const supportedTasks = getCatalogSupportedTasks(model);
   if (supportedTasks.length) {
     return supportedTasks.some((task) => STUDIO_SUPPORTED_TASKS.has(task));
   }
@@ -258,8 +458,43 @@ async function writeModelListCache(models) {
   return payload;
 }
 
-async function startModelSync() {
+async function buildModelListFromDiskCatalog() {
+  const catalog = await getBltcyModelCatalogFromDisk();
+  if (!catalog?.models) {
+    throw new Error('No local catalog docs available');
+  }
+  const seen = new Set();
+  const data = [];
+  for (const entry of catalog.models.values()) {
+    const id = String(entry?.id || '').trim();
+    if (!id || seen.has(id.toLowerCase())) continue;
+    seen.add(id.toLowerCase());
+    data.push({
+      id,
+      provider: entry.provider || '',
+      pricing: entry.pricing || null,
+      catalog: {
+        desc: entry.desc || '',
+        tags: entry.tags || '',
+        apis: Array.isArray(entry.apis) ? entry.apis : [],
+        taskCapabilities: entry.taskCapabilities || {},
+        capabilities: entry.capabilities || {},
+        resolutionPresets: entry.resolutionPresets || []
+      }
+    });
+  }
+  return sanitizeModelListResponse({
+    ok: true,
+    cached: false,
+    source: 'project-docs',
+    total: data.length,
+    data
+  });
+}
+
+async function startModelSync(mode = 'full') {
   if (modelSyncState.running) return modelSyncState;
+  const normalizedMode = mode === 'docs' ? 'docs' : 'full';
   updateModelSyncState({
     running: true,
     startedAt: Date.now(),
@@ -269,24 +504,40 @@ async function startModelSync() {
     total: 0,
     current: '',
     error: '',
-    modelsCount: 0
+    modelsCount: 0,
+    mode: normalizedMode,
+    source: normalizedMode === 'docs' ? 'project-docs' : 'remote-refresh'
   });
 
   (async () => {
     try {
-      const models = await listModels(undefined, {
-        includeCatalog: true,
-        refreshCatalog: true,
-        onCatalogProgress: (progress) => {
-          updateModelSyncState({
-            stage: progress.stage || 'processing',
-            processed: Number(progress.processed || 0),
-            total: Number(progress.total || 0),
-            current: progress.current || '',
-            running: true
-          });
-        }
-      });
+      let models;
+      if (normalizedMode === 'docs') {
+        updateModelSyncState({
+          stage: 'rebuilding_docs',
+          processed: 0,
+          total: 1,
+          current: '正在根据项目文档重建模型目录',
+          running: true,
+          source: 'project-docs'
+        });
+        models = await buildModelListFromDiskCatalog();
+      } else {
+        models = await listModels(undefined, {
+          includeCatalog: true,
+          refreshCatalog: true,
+          onCatalogProgress: (progress) => {
+            updateModelSyncState({
+              stage: progress.stage || 'processing',
+              processed: Number(progress.processed || 0),
+              total: Number(progress.total || 0),
+              current: progress.current || '',
+              running: true,
+              source: 'remote-refresh'
+            });
+          }
+        });
+      }
       await writeModelListCache(models);
       modelCapabilityCache.fetchedAt = 0;
       updateModelSyncState({
@@ -296,7 +547,8 @@ async function startModelSync() {
         processed: modelSyncState.total || modelSyncState.processed,
         total: modelSyncState.total || modelSyncState.processed,
         current: '',
-        modelsCount: models.total || 0
+        modelsCount: models.total || 0,
+        source: normalizedMode === 'docs' ? 'project-docs' : 'remote-refresh'
       });
     } catch (error) {
       updateModelSyncState({
@@ -304,7 +556,8 @@ async function startModelSync() {
         finishedAt: Date.now(),
         stage: 'failed',
         error: extractErrorMessage(error),
-        current: ''
+        current: '',
+        source: normalizedMode === 'docs' ? 'project-docs' : 'remote-refresh'
       });
     }
   })();
@@ -547,7 +800,14 @@ function resolutionMatchesAspectRatio(resolution, aspectRatio) {
 
 async function resolveTaskCapabilities(modelId, taskType) {
   const catalogEntry = await getBltcyCatalogEntry(modelId);
-  return pickCatalogCaps(catalogEntry?.taskCapabilities?.[taskType] || catalogEntry?.capabilities || {});
+  return deriveTaskRoleCapabilities(
+    taskType,
+    applyProviderCapabilityPolicy(
+      modelId,
+      taskType,
+      pickCatalogCaps(catalogEntry?.taskCapabilities?.[taskType] || catalogEntry?.capabilities || {})
+    )
+  );
 }
 
 async function validateInput(input) {
@@ -560,6 +820,9 @@ async function validateInput(input) {
   const hasSourceImage = hasInputValue(input.sourceImageUrl) || hasInputValue(input.sourceAssetId);
   const hasReferenceImage = hasInputValue(input.referenceImageUrl) || hasInputValue(input.referenceAssetId) || hasInputValue(input.referenceImageUrls) || hasInputValue(input.referenceAssetIds);
   const hasEndFrameImage = hasInputValue(input.endFrameImageUrl) || hasInputValue(input.endFrameAssetId);
+  const hasOmniImages = hasInputValue(input.omniImageUrls);
+  const hasOmniVideos = hasInputValue(input.omniVideoUrls);
+  const hasElements = hasInputValue(input.elementList);
   const referenceCount = []
     .concat(input.referenceImageUrl || [])
     .concat(input.referenceAssetId || [])
@@ -569,13 +832,22 @@ async function validateInput(input) {
     .filter(Boolean)
     .length;
   const storyboardMode = String(input.videoGenerationMode || '').trim() === 'storyboard';
+  const intelligentMode = String(input.videoGenerationMode || '').trim() === 'intelligent';
   const storyboardText = String(input.storyboardText || '').trim();
   if (storyboardMode) {
     if (input.type !== 'text_to_video') return 'storyboard mode only supports text_to_video';
-    if (taskCaps.supportsStoryboard !== true) return `model ${input.model} does not support storyboard mode`;
+    if (taskCaps.supportsStoryboardPrompt !== true) return `model ${input.model} does not support storyboard mode`;
     if (!storyboardText) return 'storyboardText is required when storyboard mode is enabled';
-    if (hasSourceImage || hasReferenceImage || hasEndFrameImage) {
-      return 'storyboard mode does not support image inputs for this model';
+    if (hasSourceImage || hasReferenceImage || hasEndFrameImage || hasOmniImages || hasOmniVideos || hasElements) {
+      return 'storyboard mode only supports structured text shots and does not accept visual inputs';
+    }
+  }
+  if (intelligentMode) {
+    if (input.type !== 'text_to_video') return 'intelligent mode only supports text_to_video';
+    if (taskCaps.supportsIntelligentStoryboard !== true) return `model ${input.model} does not support intelligent storyboard mode`;
+    if (!String(input.prompt || '').trim()) return 'prompt is required when intelligent mode is enabled';
+    if (hasSourceImage || hasReferenceImage || hasEndFrameImage || hasOmniImages || hasOmniVideos || hasElements) {
+      return 'intelligent mode currently only supports prompt-driven submission for this model';
     }
   }
 
@@ -621,12 +893,12 @@ async function validateInput(input) {
     if (input.cfgScale !== undefined && input.cfgScale !== null && input.cfgScale !== '' && taskCaps.supportsCfgScale !== true) {
       return `model ${input.model} does not support cfg_scale`;
     }
-    if ((hasInputValue(input.cameraControlType) || input.cameraControlPan !== undefined || input.cameraControlTilt !== undefined || input.cameraControlZoom !== undefined) && taskCaps.supportsCameraControls !== true) {
+    if ((hasInputValue(input.cameraControlType) || input.cameraControlPan !== undefined || input.cameraControlTilt !== undefined || input.cameraControlZoom !== undefined) && taskCaps.supportsDirectionalCameraControls !== true) {
       return `model ${input.model} does not support camera_control`;
     }
-    if ((hasInputValue(input.elementList) || hasInputValue(input.omniImageUrls) || hasInputValue(input.omniVideoUrls)) && !(taskCaps.supportsElements || taskCaps.supportsOmniImageList || taskCaps.supportsOmniVideoList)) {
-      return `model ${input.model} does not support omni or element inputs`;
-    }
+    if (hasElements && taskCaps.supportsElements !== true) return `model ${input.model} does not support element_list`;
+    if (hasOmniImages && taskCaps.supportsOmniImageList !== true) return `model ${input.model} does not support omni_image_urls`;
+    if (hasOmniVideos && taskCaps.supportsOmniVideoList !== true) return `model ${input.model} does not support omni_video_urls`;
     if (hasReferenceImage && taskCaps.supportsReferenceImage !== true) {
       return `model ${input.model} does not support reference_image`;
     }
@@ -687,6 +959,7 @@ function updateTaskCache(task) {
 function composeEffectivePrompt(input) {
   const basePrompt = String(input.prompt || '').trim();
   const storyboardMode = String(input.videoGenerationMode || '').trim() === 'storyboard';
+  const intelligentMode = String(input.videoGenerationMode || '').trim() === 'intelligent';
   const storyboardText = String(input.storyboardText || '').trim();
   if (storyboardMode && storyboardText) {
     return {
@@ -694,6 +967,14 @@ function composeEffectivePrompt(input) {
       effectivePrompt: storyboardText,
       promptControls: ['storyboard'],
       structuredLines: storyboardText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    };
+  }
+  if (intelligentMode) {
+    return {
+      originalPrompt: basePrompt,
+      effectivePrompt: basePrompt,
+      promptControls: ['intelligent_storyboard'],
+      structuredLines: []
     };
   }
   return {
@@ -858,11 +1139,12 @@ async function resolveTaskDownload(task) {
 }
 
 async function downloadBinary(url) {
+  const validatedUrl = validateRemoteAssetUrl(url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 90 * 1000);
   let response;
   try {
-    response = await fetch(url, { signal: controller.signal });
+    response = await fetch(validatedUrl, { signal: controller.signal });
   } catch (error) {
     const wrapped = new Error(error.name === 'AbortError' ? '下载超时，请稍后重试。' : `下载失败：${error.message}`);
     wrapped.code = 'DOWNLOAD_FAILED';
@@ -884,11 +1166,12 @@ async function downloadBinary(url) {
 }
 
 async function downloadToFile(url, absolutePath) {
+  const validatedUrl = validateRemoteAssetUrl(url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 90 * 1000);
   let response;
   try {
-    response = await fetch(url, { signal: controller.signal });
+    response = await fetch(validatedUrl, { signal: controller.signal });
   } catch (error) {
     const wrapped = new Error(error.name === 'AbortError' ? '下载超时，请稍后重试。' : `下载失败：${error.message}`);
     wrapped.code = 'DOWNLOAD_FAILED';
@@ -957,7 +1240,8 @@ async function saveAssetLocally({ outputDir, kind, sourceUrl, providerTaskId, fi
       };
     }
   } else if (sourceUrl) {
-    result = await downloadBinary(sourceUrl);
+    downloadableUrl = validateRemoteAssetUrl(sourceUrl);
+    result = await downloadBinary(downloadableUrl);
   } else {
     const error = new Error('缺少可保存的资源地址。');
     error.code = 'NO_ASSET_URL';
@@ -989,7 +1273,19 @@ async function handleAssetUpload(body) {
   }
 
   const mimeType = body.mimeType || match[1];
+  if (!/^image\//i.test(mimeType)) {
+    const error = new Error('当前仅支持上传图片素材。');
+    error.code = 'UNSUPPORTED_MIME_TYPE';
+    error.statusCode = 400;
+    throw error;
+  }
   const buffer = Buffer.from(match[2], 'base64');
+  if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
+    const error = new Error('图片大小必须在 10MB 以内。');
+    error.code = 'ASSET_TOO_LARGE';
+    error.statusCode = 413;
+    throw error;
+  }
   const kind = body.kind || 'image';
   const extension = inferFileExtension(kind, '', mimeType, body.name || '');
   const relativeName = `${kind}s/${Date.now()}-${randomUUID()}.${extension}`;
@@ -1043,9 +1339,9 @@ async function buildTaskPayload(input) {
   const supportsAspectRatio = taskCaps.supportsAspectRatio === true;
   const supportsDuration = hasDurationCapability(taskCaps);
   const supportsNegativePrompt = taskCaps.supportsNegativePrompt === true;
-  const supportsSourceImage = taskCaps.supportsSourceImage === true;
-  const supportsReferenceImage = taskCaps.supportsReferenceImage === true;
-  const supportsEndFrame = taskCaps.supportsEndFrame === true;
+  const supportsSourceImage = taskCaps.supportsImageEditSourceImage === true || taskCaps.supportsImageToVideoFirstFrame === true || taskCaps.supportsSourceImage === true;
+  const supportsReferenceImage = taskCaps.supportsImageToVideoReferenceImages === true || taskCaps.supportsTextToImageReferenceImages === true || taskCaps.supportsTextToVideoReferenceImages === true || taskCaps.supportsReferenceImage === true;
+  const supportsEndFrame = taskCaps.supportsImageToVideoEndFrame === true;
   const primaryReferenceImageUrl = String(input.referenceImageUrl || '').trim() || (Array.isArray(input.referenceImageUrls) ? String(input.referenceImageUrls[0] || '').trim() : '');
   const primaryReferenceImageDataUrl = referenceImageDataUrl || referenceImageDataUrls[0] || '';
   const primaryImageUrl = String(input.sourceImageUrl || '').trim() || primaryReferenceImageUrl;
@@ -1082,7 +1378,7 @@ async function buildTaskPayload(input) {
     reference_image_data_urls: supportsReferenceImage ? resolvedReferenceImageDataUrls : undefined,
     end_frame_image_url: supportsEndFrame ? input.endFrameImageUrl : undefined,
     end_frame_image_data_url: supportsEndFrame ? endFrameImageDataUrl : undefined,
-    camera_control: taskCaps.supportsCameraControls && input.cameraControlType
+    camera_control: taskCaps.supportsDirectionalCameraControls && input.cameraControlType
       ? {
           type: input.cameraControlType,
           config: {
@@ -1091,6 +1387,9 @@ async function buildTaskPayload(input) {
             zoom: input.cameraControlZoom
           }
         }
+      : undefined,
+    shot_type: taskCaps.supportsIntelligentStoryboard && String(input.videoGenerationMode || '').trim() === 'intelligent'
+      ? 'intelligence'
       : undefined,
     omni_image_urls: taskCaps.supportsOmniImageList ? input.omniImageUrls : undefined,
     omni_video_urls: taskCaps.supportsOmniVideoList ? input.omniVideoUrls : undefined,
@@ -1114,7 +1413,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/v1/config') {
-    return json(res, 200, { sora2: getSora2RuntimeConfig() });
+    return json(res, 200, { sora2: publicConfig() });
   }
 
   if (req.method === 'GET' && url.pathname === '/api/v1/provider-profiles') {
@@ -1139,7 +1438,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         ok: true,
         activeProfileId: profile.id,
-        sora2: getSora2RuntimeConfig()
+        sora2: publicConfig()
       });
     } catch (error) {
       return json(res, 400, mapError(error));
@@ -1155,7 +1454,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, {
       ok: true,
       activeProfileId: getActiveProfileId(),
-      sora2: getSora2RuntimeConfig()
+      sora2: publicConfig()
     });
   }
 
@@ -1222,7 +1521,7 @@ const server = http.createServer(async (req, res) => {
       setSora2RuntimeConfig({
         providerLabel: body.providerLabel,
         providerType: body.providerType,
-        apiKey: body.sora2ApiKey,
+        apiKey: body.sora2ApiKey === '__KEEP__' ? undefined : body.sora2ApiKey,
         baseUrl: body.baseUrl,
         proxyUrl: body.proxyUrl,
         outputDir: body.outputDir,
@@ -1248,7 +1547,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         ok: true,
         activeProfileId: profile.id,
-        sora2: getSora2RuntimeConfig()
+        sora2: publicConfig()
       });
     } catch (error) {
       return json(res, 400, mapError(error));
@@ -1289,7 +1588,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/v1/connectivity') {
     try {
       const result = await checkConnectivity();
-      return json(res, result.ok ? 200 : 502, { sora2: getSora2RuntimeConfig(), connectivity: result });
+      return json(res, result.ok ? 200 : 502, { sora2: publicConfig(), connectivity: result });
     } catch (error) {
       return json(res, 502, mapError(error));
     }
@@ -1298,7 +1597,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/v1/diagnostics') {
     const result = {
       generatedAt: new Date().toISOString(),
-      config: getSora2RuntimeConfig(),
+      config: publicConfig(),
       connectivity: null,
       models: {
         image: null,
@@ -1323,7 +1622,7 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       result.models.video = { ok: false, message: error.message, code: error.code || 'UPSTREAM_ERROR' };
     }
-    const config = getSora2RuntimeConfig();
+    const config = publicConfig();
     result.ok = Boolean(result.connectivity?.generationReady && result.models.image?.ok && (config.capabilities.videoEnabled ? result.models.video?.ok : true));
     return json(res, result.ok ? 200 : 502, result);
   }
@@ -1347,14 +1646,14 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/v1/assets') {
-    return json(res, 200, { data: listStoredAssets() });
+    return json(res, 200, { data: listStoredAssets().map((asset) => sanitizeAssetForClient(asset)) });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/v1/assets/upload') {
     try {
       const body = await parseBody(req);
       const asset = await handleAssetUpload(body);
-      return json(res, 201, { ok: true, asset });
+      return json(res, 201, { ok: true, asset: sanitizeAssetForClient(asset) });
     } catch (error) {
       return json(res, error.statusCode || 500, mapError(error));
     }
@@ -1364,6 +1663,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && assetContentMatch) {
     const asset = getStoredAsset(assetContentMatch[1]);
     if (!asset) return json(res, 404, { error: 'Asset not found', code: 'NOT_FOUND' });
+    if (!asset.filePath || !isSafeWorkspacePath(asset.filePath)) {
+      return json(res, 403, { error: 'Asset path is invalid', code: 'ASSET_PATH_BLOCKED' });
+    }
     try {
       const buffer = await readFile(asset.filePath);
       res.writeHead(200, { 'Content-Type': asset.mimeType || 'application/octet-stream' });
@@ -1378,6 +1680,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'DELETE' && assetMatch) {
     const asset = getStoredAsset(assetMatch[1]);
     if (!asset) return json(res, 404, { error: 'Asset not found', code: 'NOT_FOUND' });
+    if (!asset.filePath || !isSafeWorkspacePath(asset.filePath)) {
+      return json(res, 403, { error: 'Asset path is invalid', code: 'ASSET_PATH_BLOCKED' });
+    }
     try {
       await deleteAssetFile(asset.filePath);
       await deleteStoredAsset(asset.id);
@@ -1408,7 +1713,7 @@ const server = http.createServer(async (req, res) => {
           await updateTaskCache(task);
         }
       }
-      return json(res, 201, { ok: true, saved });
+      return json(res, 201, { ok: true, saved: sanitizeSavedAsset(saved) });
     } catch (error) {
       return json(res, error.statusCode || 500, mapError(error));
     }
@@ -1473,7 +1778,7 @@ const server = http.createServer(async (req, res) => {
       };
       const task = mapLocalTask(randomUUID(), taskInput, providerResponse);
       await updateTaskCache(task);
-      return json(res, 201, task);
+      return json(res, 201, sanitizeTaskForClient(task));
     } catch (error) {
       if (body && payload) {
         const failedInput = {
@@ -1501,9 +1806,7 @@ const server = http.createServer(async (req, res) => {
     let data = Array.isArray(cached.data) ? cached.data : [];
     if (taskType) {
       data = data.filter((model) => {
-        const supportedTasks = Array.isArray(model?.catalog?.capabilities?.supportedTasks)
-          ? model.catalog.capabilities.supportedTasks
-          : [];
+        const supportedTasks = getCatalogSupportedTasks(model);
         return supportedTasks.length ? supportedTasks.includes(taskType) : true;
       });
     }
@@ -1511,6 +1814,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, {
       ok: true,
       cached: true,
+      source: 'runtime-cache',
       updatedAt: cached.updatedAt,
       total: data.length,
       data
@@ -1519,7 +1823,9 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/api/v1/models/sync') {
     try {
-      const state = await startModelSync();
+      const body = await parseBody(req);
+      const mode = String(body?.mode || 'full').trim().toLowerCase();
+      const state = await startModelSync(mode);
       return json(res, 202, { ok: true, sync: state });
     } catch (error) {
       return json(res, 502, mapError(error));
@@ -1533,13 +1839,13 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/v1/tasks') {
     const status = url.searchParams.get('status');
     const studioTaskId = url.searchParams.get('studioTaskId');
-    const page = Number(url.searchParams.get('page') || '1');
-    const pageSize = Number(url.searchParams.get('pageSize') || '20');
+    const page = Math.max(1, Number(url.searchParams.get('page') || '1') || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') || '20') || 20));
     let all = listStoredTasks().sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     if (status) all = all.filter((task) => task.status === status);
     if (studioTaskId) all = all.filter((task) => task.studioTaskId === studioTaskId);
     const total = all.length;
-    const data = all.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize);
+    const data = all.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize).map((task) => sanitizeTaskForClient(task));
     return json(res, 200, { data, page, pageSize, total });
   }
 
@@ -1548,7 +1854,7 @@ const server = http.createServer(async (req, res) => {
     const task = tasks.get(taskMatch[1]) || getStoredTask(taskMatch[1]);
     if (!task) return json(res, 404, { error: 'Task not found', code: 'NOT_FOUND' });
     await refreshTask(task);
-    return json(res, 200, task);
+    return json(res, 200, sanitizeTaskForClient(task));
   }
 
   const taskDownloadMatch = url.pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/browser-download$/);
@@ -1591,7 +1897,7 @@ const server = http.createServer(async (req, res) => {
       task.updatedAt = new Date().toISOString();
       await updateTaskCache(task);
       return json(res, 200, {
-        ...task,
+        ...sanitizeTaskForClient(task),
         warning: upstreamCancelError
           ? 'Upstream cancel request failed, but the local task has been marked as canceled.'
           : null
@@ -1618,7 +1924,7 @@ const server = http.createServer(async (req, res) => {
       };
       const retried = mapLocalTask(randomUUID(), retriedInput, providerResponse);
       await updateTaskCache(retried);
-      return json(res, 201, retried);
+      return json(res, 201, sanitizeTaskForClient(retried));
     } catch (error) {
       if (payload) {
         const failedRetryInput = {
@@ -1676,8 +1982,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   const filePath = url.pathname === '/' ? '/index.html' : url.pathname;
-  const fullPath = `public${filePath}`;
-  if (existsSync(fullPath)) {
+  const fullPath = resolve(process.cwd(), 'public', `.${filePath}`);
+  const publicRoot = resolve(process.cwd(), 'public');
+  if ((fullPath === publicRoot || fullPath.startsWith(`${publicRoot}\\`) || fullPath.startsWith(`${publicRoot}/`)) && existsSync(fullPath)) {
     const ext = fullPath.split('.').pop();
     const types = {
       html: 'text/html; charset=utf-8',
@@ -1691,6 +1998,8 @@ const server = http.createServer(async (req, res) => {
 
   json(res, 404, { error: 'Not found', code: 'NOT_FOUND' });
 });
+
+let activePort = null;
 
 async function listenOnPort(port) {
   return new Promise((resolve, reject) => {
@@ -1708,7 +2017,8 @@ async function listenOnPort(port) {
   });
 }
 
-async function startServer() {
+export async function startServer() {
+  if (activePort !== null && server.listening) return activePort;
   await initStorage();
   const storedConfig = getStoredConfig();
   if (storedConfig) setSora2RuntimeConfig(storedConfig);
@@ -1718,9 +2028,10 @@ async function startServer() {
     const port = BASE_PORT + offset;
     try {
       await listenOnPort(port);
+      activePort = port;
       if (offset > 0) console.warn(`Port ${BASE_PORT} was unavailable, auto-switched to ${port}.`);
       console.log(`Sora2 workbench running at http://localhost:${port}`);
-      return;
+      return port;
     } catch (error) {
       if (error.code === 'EADDRINUSE') {
         console.warn(`Port ${port} is in use, retrying...`);
@@ -1732,10 +2043,26 @@ async function startServer() {
 
   console.error(`Unable to start server: ports ${BASE_PORT}-${BASE_PORT + 10} are all in use.`);
   console.error('Please free a port or set PORT explicitly, e.g. PORT=3100 npm run dev');
-  process.exit(1);
+  throw new Error(`Unable to start server on ports ${BASE_PORT}-${BASE_PORT + 10}`);
 }
 
-startServer().catch((error) => {
-  console.error('Failed to start server:', error.message);
-  process.exit(1);
-});
+export async function stopServer() {
+  if (!server.listening) {
+    activePort = null;
+    return;
+  }
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+  activePort = null;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === ENTRY_FILE) {
+  startServer().catch((error) => {
+    console.error('Failed to start server:', error.message);
+    process.exit(1);
+  });
+}

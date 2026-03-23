@@ -82,6 +82,7 @@
               <label for="sora2ApiKey">
                 API Key
                 <input id="sora2ApiKey" name="sora2ApiKey" type="password" placeholder="sk-..." />
+                <span class="inline-hint">仅在你输入新值时更新；留空会保留当前已保存密钥。</span>
               </label>
               <label for="proxyUrl">
                 代理地址
@@ -146,12 +147,14 @@
 
               <div class="config-actions">
                 <button type="submit">保存提供商配置</button>
+                <button id="resetConfigDraft" type="button" class="secondary-button">恢复已保存配置</button>
                 <button id="checkConnectivity" type="button" class="secondary-button">检测连通性</button>
                 <button id="runDiagnostics" type="button" class="secondary-button">运行完整诊断</button>
               </div>
             </form>
 
             <div id="configStatus" class="status-line">尚未加载配置</div>
+            <div id="configDraftStatus" class="status-line"></div>
           </section>
 
           <section class="card">
@@ -160,7 +163,11 @@
                 <p class="section-tag">模型</p>
                 <h2>模型目录与诊断</h2>
               </div>
-              <button id="loadModels" type="button">加载模型</button>
+              <div class="config-actions">
+                <button id="loadModels" type="button">加载缓存模型</button>
+                <button id="reloadModelsFull" type="button" class="secondary-button">完全重载</button>
+                <button id="reloadModelsFromDocs" type="button" class="secondary-button">按项目文档重建</button>
+              </div>
             </div>
 
             <div id="modelSyncPanel" class="model-sync hidden">
@@ -246,24 +253,24 @@
                 <div class="storyboard-shell">
                   <div class="storyboard-topbar">
                     <div class="storyboard-heading">
-                      <span class="storyboard-kicker">Sora-2 Storyboard</span>
+                      <span class="storyboard-kicker">Storyboard Prompt</span>
                       <h3>分镜工作区</h3>
-                      <p class="storyboard-copy">按镜头组织视频节奏。提交时会自动编译为 `sora-2` 的故事板 prompt。</p>
+                      <p class="storyboard-copy">按镜头组织视频节奏。仅在当前模型与 Provider 同时支持 storyboard prompt 时启用。</p>
                     </div>
                     <div class="storyboard-actions">
                       <label for="videoGenerationMode" class="storyboard-mode">
                         <span>视频模式</span>
                         <select id="videoGenerationMode" name="videoGenerationMode">
                           <option value="standard">标准生成</option>
-                          <option value="storyboard">故事板模式</option>
                         </select>
                       </label>
+                      <div id="videoModeHint" class="storyboard-copy"></div>
                       <button id="addStoryboardShot" type="button" class="secondary-button">添加镜头</button>
                     </div>
                   </div>
                   <div id="storyboardWorkspace" class="storyboard-stage">
                     <section class="storyboard-canvas">
-                      <div class="storyboard-note">当前接入的 API 仅支持纯文本故事板提交，不支持参考图、首尾帧或镜头级图片输入。</div>
+                      <div class="storyboard-note">当前模式提交的是纯文本 storyboard prompt。Kling 的智能分镜与 Elements 属于独立能力，不等同于这里的 storyboard 编辑器。</div>
                       <div id="storyboardTimeline" class="storyboard-timeline"></div>
                       <div id="storyboardEditor" class="storyboard-editor"></div>
                     </section>
@@ -315,6 +322,10 @@
               </div>
 
               <div id="modelCapabilityHint" class="status-line capability-status"></div>
+              <div id="modelRoleHint" class="status-line capability-status"></div>
+              <div id="taskTypeGuide" class="status-line capability-status"></div>
+              <div class="inline-hint inline-hint-strong">提交前先确认模型能力、输入类型和输出比例是否匹配，避免无效排队。</div>
+              <div id="fieldGuidePanel" class="field-guide-panel"></div>
 
               <div class="inline-grid">
                 <label id="aspectRatioWrap" for="aspectRatio">
@@ -336,9 +347,11 @@
                   自定义分辨率
                   <input id="resolutionInput" name="resolution" placeholder="例如 1024x1024 或 1280x720" />
                 </label>
-                <label id="durationWrap" for="duration">
+                <label id="durationWrap" for="durationSelect">
                   时长（秒）
-                  <input id="duration" name="duration" type="number" step="1" min="1" max="60" placeholder="例如 8" />
+                  <select id="durationSelect" class="hidden"></select>
+                  <input id="durationInput" type="number" step="1" min="1" max="60" placeholder="例如 8" class="hidden" />
+                  <input id="duration" name="duration" type="hidden" />
                 </label>
               </div>
 
@@ -352,6 +365,9 @@
                   <input id="referenceImageUrl" name="referenceImageUrl" placeholder="可选，用于约束主体或风格" />
                 </label>
               </div>
+              <div id="visualInputGuide" class="status-line capability-status hidden"></div>
+              <div id="sourceImageHint" class="status-line capability-status hidden"></div>
+              <div id="referenceImageHint" class="status-line capability-status hidden"></div>
 
               <div class="inline-grid">
                 <label id="sourceAssetWrap" for="sourceAssetSelect">
@@ -398,6 +414,7 @@
                   <input id="endFrameUploadInput" type="file" accept="image/*" />
                 </label>
               </div>
+              <div id="endFrameHint" class="status-line capability-status hidden"></div>
 
               <div id="videoAdvancedRow" class="inline-grid hidden">
                 <label id="providerModeWrap" for="providerMode">
@@ -450,6 +467,7 @@
                   <textarea id="elementList" name="elementList" rows="4" placeholder="每行一个元素描述"></textarea>
                 </label>
               </div>
+              <div id="omniInputHint" class="status-line capability-status hidden"></div>
 
               <div class="inline-grid">
                 <label for="seed">

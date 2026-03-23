@@ -646,6 +646,21 @@ label {
   line-height: 1.45;
 }
 
+.inline-hint {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.55;
+}
+
+.inline-hint-strong {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(43, 88, 118, 0.07);
+  border: 1px solid rgba(43, 88, 118, 0.12);
+  color: var(--muted-strong);
+}
+
 input,
 select,
 textarea {
@@ -830,8 +845,8 @@ button:disabled,
 }
 
 .model-summary-list {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 8px;
   min-height: 132px;
   align-content: flex-start;
@@ -856,6 +871,137 @@ button:disabled,
   color: var(--muted);
   background: rgba(17, 32, 49, 0.04);
   border-color: rgba(17, 32, 49, 0.08);
+}
+
+.model-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(17, 32, 49, 0.08);
+}
+
+.model-card-id {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.model-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.model-card-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(43, 88, 118, 0.08);
+  border: 1px solid rgba(43, 88, 118, 0.14);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.model-card-tag-gated {
+  background: rgba(166, 96, 32, 0.08);
+  border-color: rgba(166, 96, 32, 0.18);
+  color: #8a571f;
+}
+
+.model-card-tag-muted {
+  background: rgba(17, 32, 49, 0.04);
+  border-color: rgba(17, 32, 49, 0.08);
+  color: var(--muted);
+}
+
+.model-card-meta {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.field-guide-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.field-guide-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(17, 32, 49, 0.08);
+}
+
+.field-guide-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.field-guide-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.field-guide-kind {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(43, 88, 118, 0.08);
+  border: 1px solid rgba(43, 88, 118, 0.14);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.field-guide-copy,
+.field-guide-tip {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.model-card-detail {
+  padding-top: 4px;
+  border-top: 1px dashed rgba(17, 32, 49, 0.1);
+}
+
+.model-card-detail summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  list-style: none;
+}
+
+.model-card-detail summary::-webkit-details-marker {
+  display: none;
+}
+
+.model-matrix {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.model-matrix-row {
+  display: grid;
+  gap: 6px;
+}
+
+.model-matrix-row strong {
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .diagnostic-grid {

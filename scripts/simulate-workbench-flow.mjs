@@ -1,5 +1,4 @@
 import http from 'node:http';
-import { spawn } from 'node:child_process';
 
 const APP_PORT = Number(process.env.SIM_APP_PORT || 3040);
 const MOCK_PORT = Number(process.env.SIM_MOCK_PORT || 4040);
@@ -25,10 +24,10 @@ function startMockServer() {
     if (req.url === '/v1/models' && req.method === 'GET') {
       return send(200, {
         data: [
-          { id: 'sora-2' },
-          { id: 'sora-2-pro' },
-          { id: 'gpt-image-1' },
-          { id: 'dall-e-3' }
+          { id: 'sora-2', provider: 'openai' },
+          { id: 'sora-2-pro', provider: 'openai' },
+          { id: 'gpt-image-1', provider: 'openai' },
+          { id: 'dall-e-3', provider: 'openai' }
         ]
       });
     }
@@ -75,16 +74,17 @@ function startMockServer() {
   });
 }
 
-function startAppServer() {
-  const child = spawn('node', ['--use-env-proxy', 'src/server.js'], {
-    env: { ...process.env, PORT: String(APP_PORT), OPENAI_BASE_URL: `http://localhost:${MOCK_PORT}` },
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-
-  child.stdout.on('data', (d) => process.stdout.write(`[app] ${d}`));
-  child.stderr.on('data', (d) => process.stderr.write(`[app-err] ${d}`));
-
-  return child;
+async function startAppServer() {
+  process.env.PORT = String(APP_PORT);
+  process.env.OPENAI_BASE_URL = `http://localhost:${MOCK_PORT}`;
+  const { startServer, stopServer } = await import('../src/server.js');
+  const port = await startServer();
+  return {
+    port,
+    async close() {
+      await stopServer();
+    }
+  };
 }
 
 async function request(path, { method = 'GET', body } = {}) {
@@ -109,8 +109,8 @@ async function run() {
 
   try {
     mock = await startMockServer();
-    app = startAppServer();
-    await sleep(700);
+    app = await startAppServer();
+    await sleep(200);
 
     const health = await request('/api/v1/health');
     checks.push(['health', health.status === 200]);
@@ -172,7 +172,7 @@ async function run() {
   } catch (e) {
     failures.push(e.message);
   } finally {
-    if (app && !app.killed) app.kill('SIGTERM');
+    if (app) await app.close();
     if (mock?.server) await new Promise((r) => mock.server.close(() => r()));
   }
 

@@ -33,6 +33,14 @@ export const PROVIDER_PRESETS = {
     videoCreatePath: '/v1/videos',
     videoRetrievePathTemplate: '/v1/videos/{id}',
     videoCancelPathTemplate: '/v1/videos/{id}/cancel',
-    videoContentPathTemplate: '/v1/videos/{id}/content'
+    videoContentPathTemplate: '/v1/videos/{id}/content',
+    providerCapabilities: {
+      supportsStoryboardPrompt: true,
+      supportsSoraCharacterInsert: true,
+      supportsNativeKlingVideoRoutes: true,
+      supportsKlingOmniVideo: true,
+      supportsKlingMultiImageToVideo: true,
+      supportsKlingIntelligentStoryboardInput: false
+    }
   }
 };

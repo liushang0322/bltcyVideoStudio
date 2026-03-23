@@ -25,7 +25,8 @@ const DEFAULT_RUNTIME_CONFIG = {
   videoCreatePath: PROVIDER_PRESETS.bltcy.videoCreatePath,
   videoRetrievePathTemplate: PROVIDER_PRESETS.bltcy.videoRetrievePathTemplate,
   videoCancelPathTemplate: PROVIDER_PRESETS.bltcy.videoCancelPathTemplate,
-  videoContentPathTemplate: PROVIDER_PRESETS.bltcy.videoContentPathTemplate
+  videoContentPathTemplate: PROVIDER_PRESETS.bltcy.videoContentPathTemplate,
+  providerCapabilities: { ...(PROVIDER_PRESETS.bltcy.providerCapabilities || {}) }
 };
 
 let runtimeConfig = { ...DEFAULT_RUNTIME_CONFIG };
@@ -75,7 +76,28 @@ function asBoolean(value, fallback) {
 function applyProviderPreset(type) {
   const preset = PROVIDER_PRESETS[type];
   if (!preset) return;
-  runtimeConfig = { ...runtimeConfig, ...preset };
+  runtimeConfig = {
+    ...runtimeConfig,
+    ...preset,
+    providerCapabilities: { ...(preset.providerCapabilities || {}) }
+  };
+}
+
+function normalizeKlingFileValue(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+  const match = normalized.match(/^data:([^;]+);base64,(.+)$/);
+  return match ? match[2] : normalized;
+}
+
+function resolveKlingModelName(modelId) {
+  const normalized = String(modelId || '').trim();
+  if (!normalized) return normalized;
+  if (normalized === 'kling-video-v3-omni') return 'kling-v3';
+  if (/^kling-video-v\d/i.test(normalized)) {
+    return normalized.replace(/^kling-video-/, 'kling-').replace(/-omni$/i, '');
+  }
+  return normalized;
 }
 
 export function setSora2RuntimeConfig(next = {}) {
@@ -119,6 +141,10 @@ export function setSora2RuntimeConfig(next = {}) {
   );
   runtimeConfig.imageEnabled = asBoolean(next.imageEnabled, runtimeConfig.imageEnabled);
   runtimeConfig.videoEnabled = asBoolean(next.videoEnabled, runtimeConfig.videoEnabled);
+  runtimeConfig.providerCapabilities = {
+    ...(runtimeConfig.providerCapabilities || {}),
+    ...((PROVIDER_PRESETS[runtimeConfig.providerType] || {}).providerCapabilities || {})
+  };
 }
 
 export function getSora2RuntimeConfig() {
@@ -147,7 +173,26 @@ export function getSora2RuntimeConfig() {
       videoContentPathTemplate: runtimeConfig.videoContentPathTemplate,
       videoRequestFormat: runtimeConfig.videoRequestFormat,
       inputReferenceFormat: runtimeConfig.inputReferenceFormat
-    }
+    },
+    providerCapabilities: { ...(runtimeConfig.providerCapabilities || {}) }
+  };
+}
+
+export function getPublicRuntimeConfig() {
+  const config = getSora2RuntimeConfig();
+  return {
+    hasBaseUrl: config.hasBaseUrl,
+    hasApiKey: config.hasApiKey,
+    hasProxyUrl: config.hasProxyUrl,
+    providerLabel: config.providerLabel,
+    providerType: config.providerType,
+    baseUrl: config.baseUrl,
+    proxyUrl: config.proxyUrl,
+    maskedApiKey: config.maskedApiKey,
+    outputDir: config.outputDir,
+    capabilities: { ...(config.capabilities || {}) },
+    endpoints: { ...(config.endpoints || {}) },
+    providerCapabilities: { ...(config.providerCapabilities || {}) }
   };
 }
 
@@ -169,7 +214,8 @@ export function getPersistableRuntimeConfig() {
     videoRequestFormat: runtimeConfig.videoRequestFormat,
     inputReferenceFormat: runtimeConfig.inputReferenceFormat,
     imageEnabled: runtimeConfig.imageEnabled,
-    videoEnabled: runtimeConfig.videoEnabled
+    videoEnabled: runtimeConfig.videoEnabled,
+    providerCapabilities: { ...(runtimeConfig.providerCapabilities || {}) }
   };
 }
 
@@ -741,6 +787,7 @@ export async function createVideoTask(payload) {
   };
   let requestPath = runtimeConfig.videoCreatePath;
   let providerMeta = null;
+  let createTimeoutSeconds = 90;
   const defaultResolutionValue = String(taskCapability.defaultResolution || '').trim();
   const defaultImageSizeValue = String(taskCapability.defaultImageSize || '').trim();
   const supportedResolutionValues = Array.isArray(taskCapability.resolutionPresets)
@@ -817,24 +864,28 @@ export async function createVideoTask(payload) {
   if (payload.camera_control && payload.camera_control.type) {
     body.camera_control = payload.camera_control;
   }
-  if (isKlingVideo) {
-    body.model_name = payload.model;
+  if (payload.shot_type) {
+    body.shot_type = payload.shot_type;
+  }
+  if (isKlingVideo && runtimeConfig.providerCapabilities?.supportsNativeKlingVideoRoutes) {
+    body.model_name = resolveKlingModelName(payload.model);
     delete body.model;
     delete body.size;
     delete body.image_size;
     delete body.seconds;
+    createTimeoutSeconds = payload.type === 'image_to_video' ? 240 : 180;
     if (requestedSeconds !== undefined && requestedSeconds !== null && requestedSeconds !== '') body.duration = String(requestedSeconds);
     if (payload.type === 'text_to_video') {
       requestPath = '/kling/v1/videos/text2video';
-      if (Array.isArray(payload.element_list) && payload.element_list.length) {
+      if (runtimeConfig.providerCapabilities?.supportsKlingOmniVideo && Array.isArray(payload.element_list) && payload.element_list.length) {
         requestPath = '/kling/v1/videos/omni-video';
         body.element_list = payload.element_list;
       }
-      if (Array.isArray(payload.omni_image_urls) && payload.omni_image_urls.length) {
+      if (runtimeConfig.providerCapabilities?.supportsKlingOmniVideo && Array.isArray(payload.omni_image_urls) && payload.omni_image_urls.length) {
         requestPath = '/kling/v1/videos/omni-video';
-        body.image_list = payload.omni_image_urls;
+        body.image_list = payload.omni_image_urls.map((item) => normalizeKlingFileValue(item)).filter(Boolean);
       }
-      if (Array.isArray(payload.omni_video_urls) && payload.omni_video_urls.length) {
+      if (runtimeConfig.providerCapabilities?.supportsKlingOmniVideo && Array.isArray(payload.omni_video_urls) && payload.omni_video_urls.length) {
         requestPath = '/kling/v1/videos/omni-video';
         body.video_list = payload.omni_video_urls;
       }
@@ -842,15 +893,16 @@ export async function createVideoTask(payload) {
       const allImages = []
         .concat(sourceImage ? [sourceImage] : [])
         .concat(referenceImages)
+        .map((item) => normalizeKlingFileValue(item))
         .filter(Boolean);
-      if (allImages.length > 1) {
+      if (runtimeConfig.providerCapabilities?.supportsKlingMultiImageToVideo && allImages.length > 1) {
         requestPath = '/kling/v1/videos/multi-image2video';
         body.image_list = allImages;
       } else if (allImages[0]) {
         requestPath = '/kling/v1/videos/image2video';
         body.image = allImages[0];
       }
-      if (endFrameImage) body.image_tail = endFrameImage;
+      if (endFrameImage) body.image_tail = normalizeKlingFileValue(endFrameImage);
       delete body.images;
       delete body.input_reference;
       delete body.end_frame_image;
@@ -864,8 +916,8 @@ export async function createVideoTask(payload) {
     (async () => {
       try {
         return format === 'multipart'
-          ? await multipartRequest(requestPath, body, { maxTime: 90 })
-          : await apiRequest(requestPath, { method: 'POST', body, maxTime: 90 });
+          ? await multipartRequest(requestPath, body, { maxTime: createTimeoutSeconds })
+          : await apiRequest(requestPath, { method: 'POST', body, maxTime: createTimeoutSeconds });
       } catch (error) {
         if (!error.requestSummary) error.requestSummary = summarizeVideoRequest(body, format);
         throw error;
