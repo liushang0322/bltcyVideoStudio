@@ -23,6 +23,8 @@ const els = {
   modelSyncMessage: document.getElementById('modelSyncMessage'),
   modelsText: document.getElementById('models'),
   prompt: document.getElementById('prompt'),
+  imageToVideoPromptGuide: document.getElementById('imageToVideoPromptGuide'),
+  imageToVideoPromptSummary: document.getElementById('imageToVideoPromptSummary'),
   imageModelList: document.getElementById('imageModelList'),
   videoModelList: document.getElementById('videoModelList'),
   otherModelList: document.getElementById('otherModelList'),
@@ -44,6 +46,10 @@ const els = {
   modelRoleHint: document.getElementById('modelRoleHint'),
   taskTypeGuide: document.getElementById('taskTypeGuide'),
   fieldGuidePanel: document.getElementById('fieldGuidePanel'),
+  capabilityFieldLayout: document.getElementById('capabilityFieldLayout'),
+  capabilityBasicFields: document.getElementById('capabilityBasicFields'),
+  capabilityAdvancedFields: document.getElementById('capabilityAdvancedFields'),
+  capabilityExpertFields: document.getElementById('capabilityExpertFields'),
   negativePrompt: document.getElementById('negativePrompt'),
   imageOptionRow: document.getElementById('imageOptionRow'),
   imageCountWrap: document.getElementById('imageCountWrap'),
@@ -67,6 +73,21 @@ const els = {
   visualInputGuide: document.getElementById('visualInputGuide'),
   sourceImageHint: document.getElementById('sourceImageHint'),
   referenceImageHint: document.getElementById('referenceImageHint'),
+  imageToVideoInputPanel: document.getElementById('imageToVideoInputPanel'),
+  imageToVideoInputSummary: document.getElementById('imageToVideoInputSummary'),
+  imageToVideoSequenceWorkspace: document.getElementById('imageToVideoSequenceWorkspace'),
+  imageToVideoLocalWorkspace: document.getElementById('imageToVideoLocalWorkspace'),
+  imageToVideoUrlWorkspace: document.getElementById('imageToVideoUrlWorkspace'),
+  soraWorkflowPanel: document.getElementById('soraWorkflowPanel'),
+  soraWorkflowSummary: document.getElementById('soraWorkflowSummary'),
+  soraSubmitPanel: document.getElementById('soraSubmitPanel'),
+  soraSubmitSummary: document.getElementById('soraSubmitSummary'),
+  soraSubmitTags: document.getElementById('soraSubmitTags'),
+  reuseSummaryPanel: document.getElementById('reuseSummaryPanel'),
+  reuseSummaryText: document.getElementById('reuseSummaryText'),
+  reuseSummaryTags: document.getElementById('reuseSummaryTags'),
+  referenceAssetHelp: document.getElementById('referenceAssetHelp'),
+  referenceUploadHelp: document.getElementById('referenceUploadHelp'),
   sourceAssetWrap: document.getElementById('sourceAssetWrap'),
   referenceAssetWrap: document.getElementById('referenceAssetWrap'),
   sourceUploadWrap: document.getElementById('sourceUploadWrap'),
@@ -102,8 +123,12 @@ const els = {
   previewState: document.getElementById('previewState'),
   previewCard: document.getElementById('previewCard'),
   previewMeta: document.getElementById('previewMeta'),
+  previewTags: document.getElementById('previewTags'),
   previewMedia: document.getElementById('previewMedia'),
   openRemoteResult: document.getElementById('openRemoteResult'),
+  taskComparePanel: document.getElementById('taskComparePanel'),
+  taskCompareSummary: document.getElementById('taskCompareSummary'),
+  taskCompareGrid: document.getElementById('taskCompareGrid'),
   tasks: document.getElementById('tasks'),
   refreshTasks: document.getElementById('refresh'),
   studioTaskSearch: document.getElementById('studioTaskSearch'),
@@ -124,7 +149,22 @@ const els = {
   autoRefreshToggle: document.getElementById('autoRefreshToggle'),
   autoRefreshStatus: document.getElementById('autoRefreshStatus'),
   lastOutcome: document.getElementById('lastOutcome'),
-  focusLatestTask: document.getElementById('focusLatestTask')
+  focusLatestTask: document.getElementById('focusLatestTask'),
+  productModeBar: document.getElementById('productModeBar'),
+  quickJumpBar: document.getElementById('quickJumpBar'),
+  productModeHint: document.getElementById('productModeHint'),
+  modeCreator: document.getElementById('modeCreator'),
+  modeOps: document.getElementById('modeOps'),
+  modeAdmin: document.getElementById('modeAdmin'),
+  setupSection: document.getElementById('setupSection'),
+  modelSection: document.getElementById('modelSection'),
+  workspaceSection: document.getElementById('workspaceSection'),
+  creationMain: document.getElementById('creationMain'),
+  resultRail: document.getElementById('resultRail'),
+  opsSection: document.getElementById('opsSection'),
+  assetSection: document.getElementById('assetSection'),
+  queueSection: document.getElementById('queueSection'),
+  debugSection: document.getElementById('debugSection')
 };
 
 const state = {
@@ -135,10 +175,12 @@ const state = {
   savedConfigSnapshot: '',
   models: [],
   modelById: new Map(),
+  uiMode: 'creator',
   studioTasks: [],
   activeStudioTaskId: '',
   studioTaskSearchTerm: '',
   tasks: [],
+  compareTaskIds: [],
   assets: [],
   selectedTaskId: '',
   logs: [],
@@ -155,14 +197,244 @@ const state = {
     text_to_video: [],
     image_to_video: []
   },
+  capabilitySchema: null,
   modelCapabilityViewCache: new Map(),
   providerCapabilities: {},
-  hasStoredApiKey: false
+  hasStoredApiKey: false,
+  imageToVideoInputSequence: [],
+  imageToVideoSourceAssetId: '',
+  imageToVideoReferenceAssetOrder: [],
+  imageToVideoSourceUrlValue: '',
+  imageToVideoReferenceUrlOrder: []
 };
 
 const IMAGE_DEFAULT_RES = ['1024x1024', '1536x1024', '1024x1536'];
 const VIDEO_DEFAULT_RES = ['1280x720', '720x1280', '1920x1080', '1080x1920'];
 const UI_STATE_STORAGE_KEY = 'sora2studio.uiState.v1';
+const PRODUCT_UI_MODES = ['creator', 'ops', 'admin'];
+const QUICK_JUMP_TARGET_IDS = ['setupSection', 'modelSection', 'workspaceSection', 'resultRail', 'assetSection', 'queueSection', 'debugSection'];
+
+function isTypingElement(element) {
+  if (!element) return false;
+  const tag = String(element.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || element.isContentEditable;
+}
+
+function scrollToSectionById(sectionId) {
+  const target = document.getElementById(String(sectionId || '').trim());
+  if (!target) return;
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function initQuickJumpBar() {
+  const bar = els.quickJumpBar;
+  if (!bar) return;
+  const items = Array.from(bar.querySelectorAll('.quick-jump-item[data-target]'));
+  if (!items.length) return;
+  items.forEach((item) => {
+    item.addEventListener('click', (event) => {
+      event.preventDefault();
+      const targetId = String(item.dataset.target || '').trim();
+      scrollToSectionById(targetId);
+    });
+  });
+
+  const sections = QUICK_JUMP_TARGET_IDS
+    .map((id) => document.getElementById(id))
+    .filter(Boolean);
+  const syncActiveItem = () => {
+    const offset = window.scrollY + 180;
+    let activeId = sections[0]?.id || '';
+    sections.forEach((section) => {
+      if (section.offsetTop <= offset) activeId = section.id;
+    });
+    items.forEach((item) => {
+      item.classList.toggle('is-active', item.dataset.target === activeId);
+    });
+  };
+  window.addEventListener('scroll', syncActiveItem, { passive: true });
+  window.addEventListener('resize', syncActiveItem);
+  syncActiveItem();
+}
+
+function initKeyboardShortcuts() {
+  let pendingGo = false;
+  let pendingGoTimer = null;
+  const clearPendingGo = () => {
+    pendingGo = false;
+    if (pendingGoTimer) window.clearTimeout(pendingGoTimer);
+    pendingGoTimer = null;
+  };
+  document.addEventListener('keydown', (event) => {
+    if (event.defaultPrevented) return;
+    const key = String(event.key || '').toLowerCase();
+    if (key === '/' && !isTypingElement(document.activeElement)) {
+      event.preventDefault();
+      els.prompt?.focus();
+      return;
+    }
+
+    if (isTypingElement(document.activeElement)) return;
+    if (key === 'g') {
+      pendingGo = true;
+      if (pendingGoTimer) window.clearTimeout(pendingGoTimer);
+      pendingGoTimer = window.setTimeout(clearPendingGo, 900);
+      return;
+    }
+
+    if (!pendingGo) return;
+    if (key === 'c') {
+      event.preventDefault();
+      scrollToSectionById('workspaceSection');
+    } else if (key === 'q') {
+      event.preventDefault();
+      scrollToSectionById('queueSection');
+    }
+    clearPendingGo();
+  });
+}
+
+function initRevealAnimations() {
+  const revealTargets = Array.from(document.querySelectorAll('.hero-main, .hero-side, main .card'));
+  if (!revealTargets.length) return;
+  revealTargets.forEach((item) => item.classList.add('reveal-target'));
+  if (!('IntersectionObserver' in window)) {
+    revealTargets.forEach((item) => item.classList.add('is-visible'));
+    return;
+  }
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      entry.target.classList.add('is-visible');
+      observer.unobserve(entry.target);
+    });
+  }, {
+    threshold: 0.14,
+    rootMargin: '0px 0px -8% 0px'
+  });
+  revealTargets.forEach((item) => observer.observe(item));
+}
+
+function isSoraFamilyModel(model) {
+  const id = String(model?.id || '').trim().toLowerCase();
+  const provider = String(model?.provider || '').trim().toLowerCase();
+  const title = String(model?.title || model?.catalog?.title || '').trim().toLowerCase();
+  const tags = Array.isArray(model?.tags) ? model.tags.join(' ').toLowerCase() : '';
+  const haystack = [id, provider, title, tags].join(' ');
+  return /(^|[\s_-])sora([\s_-]|$)/.test(haystack) || id.startsWith('sora');
+}
+
+function applySoraProductBranding(filteredCount = 0) {
+  document.title = 'Sora Bridge Studio';
+  const eyebrow = document.querySelector('.eyebrow');
+  if (eyebrow) eyebrow.textContent = 'Sora Bridge Studio';
+  const heroTitle = document.querySelector('.hero-main h1');
+  if (heroTitle) heroTitle.textContent = 'Sora 创作桥梁工作台';
+  const heroCopy = document.querySelector('.hero-copy');
+  if (heroCopy) heroCopy.textContent = '围绕 Sora 的真实能力组织输入、任务、结果和复用流程。界面只暴露当前 Sora 模型可提交、可理解、可恢复的能力。';
+  const heroNote = document.querySelector('.hero-note');
+  if (heroNote) {
+    heroNote.textContent = filteredCount > 0
+      ? `当前界面已收敛为 Sora-only 工作流，已自动隐藏 ${filteredCount} 个非 Sora 模型，避免兼容层噪音干扰创建流程。`
+      : '当前界面已收敛为 Sora-only 工作流，只保留 Sora 的真实能力和创作路径。';
+  }
+  const heroMetrics = document.querySelectorAll('.metric-card strong');
+  if (heroMetrics[0]) heroMetrics[0].textContent = 'Sora Family Only';
+  if (heroMetrics[1]) heroMetrics[1].textContent = '严格模型驱动 UI';
+  const providerType = document.getElementById('providerType');
+  if (providerType?.value === 'compatible') {
+    const providerLabel = document.getElementById('providerLabel');
+    if (providerLabel && !String(providerLabel.value || '').trim()) providerLabel.value = 'BLTCY Sora';
+  }
+}
+
+function isNanoBananaFamilyModel(model) {
+  const id = String(model?.id || '').trim().toLowerCase();
+  const provider = String(model?.provider || '').trim().toLowerCase();
+  const title = String(model?.title || model?.catalog?.title || '').trim().toLowerCase();
+  const tags = Array.isArray(model?.tags) ? model.tags.join(' ').toLowerCase() : '';
+  const haystack = [id, provider, title, tags].join(' ');
+  return /nano[\s_-]?banana|banana/.test(haystack);
+}
+
+function isVeoFamilyModel(model) {
+  const id = String(model?.id || '').trim().toLowerCase();
+  const provider = String(model?.provider || '').trim().toLowerCase();
+  const title = String(model?.title || model?.catalog?.title || '').trim().toLowerCase();
+  const tags = Array.isArray(model?.tags) ? model.tags.join(' ').toLowerCase() : '';
+  const haystack = [id, provider, title, tags].join(' ');
+  return /(^|[\s_.-])veo([\s_.-]|$)/.test(haystack) || id.startsWith('veo');
+}
+
+function isVeoTaskModel(model = currentModel()) {
+  return isVeoFamilyModel(model);
+}
+
+function isFocusedBridgeModel(model) {
+  return isSoraFamilyModel(model) || isVeoFamilyModel(model) || isNanoBananaFamilyModel(model);
+}
+
+function getTaskDisplayLabel(taskType = '') {
+  const map = {
+    text_to_image: '文生图',
+    image_edit: '图片编辑',
+    text_to_video: '文生视频',
+    image_to_video: '图生视频'
+  };
+  return map[String(taskType || '').trim()] || String(taskType || '').trim() || '任务';
+}
+
+function getTaskPromptModeLabel(taskType = '') {
+  if (taskType === 'image_to_video') return '图像序列 + Prompt';
+  if (taskType === 'image_edit') return '原图 + Prompt';
+  if (taskType === 'text_to_image') return 'Prompt 生图';
+  return 'Prompt 生视频';
+}
+
+function hasSourceVisualInput(taskType = currentTaskType()) {
+  if (taskType === 'image_to_video') {
+    const sequenceSummary = getImageToVideoInputSequenceSummary();
+    return Boolean(sequenceSummary?.primary);
+  }
+  const sourceImageUrl = String(els.sourceImageUrl?.value || '').trim();
+  const sourceAssetId = String(els.sourceAssetSelect?.value || '').trim();
+  return Boolean(sourceImageUrl || sourceAssetId);
+}
+
+function supportsImageToVideoReferenceInputs(caps = {}) {
+  return Boolean(caps.supportsImageToVideoReferenceImages);
+}
+
+function applyFocusedBridgeBranding(filteredCount = 0) {
+  document.title = 'Sora + Veo + Nano Banana Studio';
+  const eyebrow = document.querySelector('.eyebrow');
+  if (eyebrow) eyebrow.textContent = 'Sora + Veo + Nano Banana Studio';
+  const heroTitle = document.querySelector('.hero-main h1');
+  if (heroTitle) heroTitle.textContent = '视频围绕 Sora，生图围绕 Nano Banana';
+  const heroCopy = document.querySelector('.hero-copy');
+  if (heroCopy) heroCopy.textContent = '文生图与图像编辑优先围绕 Nano Banana，文生视频与图生视频优先围绕 Sora。界面继续严格按模型真实能力组织输入、任务和结果。';
+  const heroNote = document.querySelector('.hero-note');
+  if (heroNote) {
+    heroNote.textContent = filteredCount > 0
+      ? `当前界面已收敛到 Sora + Nano Banana 工作流，已自动隐藏 ${filteredCount} 个无关模型。`
+      : '当前界面聚焦 Sora 与 Nano Banana，两类模型各自承担最擅长的任务。';
+  }
+  const heroMetrics = document.querySelectorAll('.metric-card strong');
+  if (heroMetrics[0]) heroMetrics[0].textContent = 'Sora/Veo Video + Banana Image';
+  if (heroMetrics[1]) heroMetrics[1].textContent = '严格模型驱动 UI';
+  const providerType = document.getElementById('providerType');
+  if (providerType?.value === 'compatible') {
+    const providerLabel = document.getElementById('providerLabel');
+    if (providerLabel && !String(providerLabel.value || '').trim()) providerLabel.value = 'BLTCY Creative Bridge';
+  }
+  if (heroTitle) heroTitle.textContent = '视频围绕 Sora + Veo，生图围绕 Nano Banana';
+  if (heroCopy) heroCopy.textContent = '文生图与图片编辑优先围绕 Nano Banana，文生视频与图生视频围绕 Sora 和 Veo。界面继续严格按模型真实能力组织输入、任务和结果。';
+  if (heroNote) {
+    heroNote.textContent = filteredCount > 0
+      ? `当前界面已收敛到 Sora + Veo + Nano Banana 工作流，已自动隐藏 ${filteredCount} 个无关模型。`
+      : '当前界面聚焦 Sora、Veo 与 Nano Banana，让视频与图片各自回到最合适的模型家族。';
+  }
+}
 
 function readUiState() {
   try {
@@ -178,6 +450,50 @@ function writeUiState(nextState) {
   } catch {
     // Ignore localStorage write failures.
   }
+}
+
+function normalizeUiMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  return PRODUCT_UI_MODES.includes(mode) ? mode : 'creator';
+}
+
+function updateProductModeUiState() {
+  const mode = normalizeUiMode(state.uiMode);
+  const modeButtons = [
+    ['creator', els.modeCreator],
+    ['ops', els.modeOps],
+    ['admin', els.modeAdmin]
+  ];
+  modeButtons.forEach(([key, button]) => {
+    if (!button) return;
+    button.classList.toggle('product-mode-active', key === mode);
+  });
+  if (els.productModeHint) {
+    const map = {
+      creator: 'Creator mode: hide setup/debug and focus on creation + result.',
+      ops: 'Ops mode: focus on queue, compare, and result review.',
+      admin: 'Admin mode: show full setup, diagnostics, and debug.'
+    };
+    els.productModeHint.textContent = map[mode] || map.creator;
+  }
+}
+
+function applyProductMode(mode, persist = true) {
+  const normalized = normalizeUiMode(mode);
+  state.uiMode = normalized;
+  document.body.classList.remove('app-mode-creator', 'app-mode-ops', 'app-mode-admin');
+  document.body.classList.add(`app-mode-${normalized}`);
+  const showSetup = normalized === 'admin';
+  const showDebug = normalized === 'admin';
+  const showCreationMain = normalized !== 'ops';
+  showElement(els.setupSection, showSetup);
+  showElement(els.creationMain, showCreationMain);
+  showElement(els.debugSection, showDebug);
+  showElement(els.workspaceSection, true);
+  showElement(els.resultRail, true);
+  showElement(els.opsSection, true);
+  updateProductModeUiState();
+  if (persist) persistUiState();
 }
 
 function redactSecrets(value) {
@@ -215,6 +531,17 @@ function collectCreateDraft() {
     }
     draft[field.name] = field.value;
   });
+  draft.__imageToVideoSourceAssetId = String(state.imageToVideoSourceAssetId || '');
+  draft.__imageToVideoReferenceAssetOrder = Array.isArray(state.imageToVideoReferenceAssetOrder)
+    ? state.imageToVideoReferenceAssetOrder.slice()
+    : [];
+  draft.__imageToVideoInputSequence = Array.isArray(state.imageToVideoInputSequence)
+    ? state.imageToVideoInputSequence.map((item) => ({ ...item }))
+    : [];
+  draft.__imageToVideoSourceUrlValue = String(state.imageToVideoSourceUrlValue || '');
+  draft.__imageToVideoReferenceUrlOrder = Array.isArray(state.imageToVideoReferenceUrlOrder)
+    ? state.imageToVideoReferenceUrlOrder.slice()
+    : [];
   return draft;
 }
 
@@ -231,11 +558,16 @@ function persistUiState() {
     : {};
   writeUiState({
     ...current,
+    uiMode: normalizeUiMode(state.uiMode),
     autoRefreshEnabled: Boolean(els.autoRefreshToggle?.checked),
     configDraft,
     selectedTaskIds: {
       ...(current.selectedTaskIds && typeof current.selectedTaskIds === 'object' ? current.selectedTaskIds : {}),
       [activeDraftKey()]: state.selectedTaskId || ''
+    },
+    compareTaskIds: {
+      ...(current.compareTaskIds && typeof current.compareTaskIds === 'object' ? current.compareTaskIds : {}),
+      [activeDraftKey()]: Array.isArray(state.compareTaskIds) ? state.compareTaskIds.slice(0, 2) : []
     },
     drafts
   });
@@ -243,6 +575,7 @@ function persistUiState() {
 
 function restoreUiPreferences() {
   const current = readUiState();
+  state.uiMode = normalizeUiMode(current.uiMode || state.uiMode);
   if (typeof current.autoRefreshEnabled === 'boolean' && els.autoRefreshToggle) {
     els.autoRefreshToggle.checked = current.autoRefreshEnabled;
   }
@@ -260,12 +593,21 @@ function restoreUiPreferences() {
     }
   }
   updateConfigDirtyState();
+  applyProductMode(state.uiMode, false);
 }
 
 function restoreSelectedTaskForActiveStudioTask() {
   const current = readUiState();
   const selectedTaskIds = current.selectedTaskIds && typeof current.selectedTaskIds === 'object' ? current.selectedTaskIds : {};
   state.selectedTaskId = String(selectedTaskIds[activeDraftKey()] || '').trim();
+}
+
+function restoreCompareTasksForActiveStudioTask() {
+  const current = readUiState();
+  const compareTaskIds = current.compareTaskIds && typeof current.compareTaskIds === 'object' ? current.compareTaskIds : {};
+  state.compareTaskIds = Array.isArray(compareTaskIds[activeDraftKey()])
+    ? compareTaskIds[activeDraftKey()].map((item) => String(item || '').trim()).filter(Boolean).slice(0, 2)
+    : [];
 }
 
 function restoreCreateDraft() {
@@ -276,6 +618,7 @@ function restoreCreateDraft() {
   if (!draft || typeof draft !== 'object') return;
 
   Object.entries(draft).forEach(([name, value]) => {
+    if (name.startsWith('__')) return;
     const field = els.createForm.elements[name];
     if (!field) return;
     if (field instanceof RadioNodeList) return;
@@ -295,6 +638,19 @@ function restoreCreateDraft() {
   if (els.storyboardText) {
     renderStoryboardEditor(parseStoryboardText(els.storyboardText.value));
   }
+  state.imageToVideoSourceAssetId = String(draft.__imageToVideoSourceAssetId || '').trim();
+  state.imageToVideoReferenceAssetOrder = Array.isArray(draft.__imageToVideoReferenceAssetOrder)
+    ? draft.__imageToVideoReferenceAssetOrder.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  state.imageToVideoInputSequence = Array.isArray(draft.__imageToVideoInputSequence)
+    ? draft.__imageToVideoInputSequence
+      .map((item) => normalizeImageToVideoSequenceItem(item))
+      .filter(Boolean)
+    : [];
+  state.imageToVideoSourceUrlValue = String(draft.__imageToVideoSourceUrlValue || '').trim();
+  state.imageToVideoReferenceUrlOrder = Array.isArray(draft.__imageToVideoReferenceUrlOrder)
+    ? draft.__imageToVideoReferenceUrlOrder.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
 }
 
 function writeLog(type, payload) {
@@ -660,7 +1016,7 @@ function buildModelCapabilityRows(model) {
   });
 }
 
-function renderModelSummary(container, models, { limit = 12, taskType = '' } = {}) {
+renderModelSummary = function renderModelSummary(container, models, { limit = 12, taskType = '' } = {}) {
   if (!container) return;
   const list = Array.isArray(models) ? models.slice(0, limit) : [];
   if (!list.length) {
@@ -700,10 +1056,119 @@ function renderModelSummary(container, models, { limit = 12, taskType = '' } = {
     ? `<div class="model-chip model-chip-muted">+${models.length - limit}</div>`
     : '';
   container.innerHTML = cards + remain;
+};
+
+function renderModelSummary(container, models, { limit = 12, taskType = '' } = {}) {
+  if (!container) return;
+  const list = Array.isArray(models) ? models.slice(0, limit) : [];
+  if (!list.length) {
+    container.innerHTML = '<div class="model-chip model-chip-muted">暂无</div>';
+    return;
+  }
+  const cards = list
+    .map((model) => {
+      const roles = summarizeModelRoleMatrix(model, taskType);
+      const taskCaps = taskType ? getModelCapabilities(model, taskType) : null;
+      const familyTags = [];
+      if (isSoraFamilyModel(model)) familyTags.push('Sora');
+      if (isVeoFamilyModel(model)) familyTags.push('Veo');
+      if (isNanoBananaFamilyModel(model)) familyTags.push('Nano Banana');
+      const meta = [];
+      if (taskCaps?.durationOptions?.length) meta.push(`时长 ${taskCaps.durationOptions.join('/')}`);
+      if (taskCaps?.aspectRatioOptions?.length) meta.push(`比例 ${taskCaps.aspectRatioOptions.slice(0, 3).join('/')}`);
+      if (taskCaps?.supportsPromptOptimize) meta.push('提示词优化');
+      const familyLine = familyTags.length
+        ? `<div class="model-card-tags">${familyTags.map((item) => `<span class="model-card-tag model-card-tag-family">${escapeHtml(item)}</span>`).join('')}</div>`
+        : '';
+      const roleLine = roles.active.length
+        ? `<div class="model-card-tags">${roles.active.map((item) => `<span class="model-card-tag">${escapeHtml(item)}</span>`).join('')}${roles.gated.map((item) => `<span class="model-card-tag model-card-tag-gated">${escapeHtml(item)}</span>`).join('')}</div>`
+        : '<div class="model-card-meta">未提取到明确能力标签</div>';
+      const metaLine = meta.length ? `<div class="model-card-meta">${escapeHtml(meta.join(' / '))}</div>` : '';
+      const detailRows = buildModelCapabilityRows(model)
+        .map((row) => `<div class="model-matrix-row">
+          <strong>${escapeHtml(row.label)}</strong>
+          <div class="model-card-tags">${row.active.map((item) => `<span class="model-card-tag">${escapeHtml(item)}</span>`).join('')}${row.gated.map((item) => `<span class="model-card-tag model-card-tag-gated">${escapeHtml(item)}</span>`).join('') || '<span class="model-card-tag model-card-tag-muted">无</span>'}</div>
+        </div>`)
+        .join('');
+      const detailBlock = `<details class="model-card-detail">
+        <summary>查看详细矩阵</summary>
+        <div class="model-matrix">${detailRows}</div>
+      </details>`;
+      return `<article class="model-card" title="${escapeAttr(model.id)}">
+        <div class="model-card-id">${escapeHtml(model.id)}</div>
+        ${familyLine}
+        ${roleLine}
+        ${metaLine}
+        ${detailBlock}
+      </article>`;
+    })
+    .join('');
+  const remain = Array.isArray(models) && models.length > limit
+    ? `<div class="model-chip model-chip-muted">+${models.length - limit}</div>`
+    : '';
+  container.innerHTML = cards + remain;
 }
 
+renderModelSummary = function renderModelSummary(container, models, { limit = 12, taskType = '' } = {}) {
+  if (!container) return;
+  const list = Array.isArray(models) ? models.slice(0, limit) : [];
+  if (!list.length) {
+    container.innerHTML = '<div class="model-chip model-chip-muted">暂无</div>';
+    return;
+  }
+  const cards = list
+    .map((model) => {
+      const roles = summarizeModelRoleMatrix(model, taskType);
+      const taskCaps = taskType ? getModelCapabilities(model, taskType) : null;
+      const familyTags = [];
+      if (isSoraFamilyModel(model)) familyTags.push('Sora');
+      if (isVeoFamilyModel(model)) familyTags.push('Veo');
+      if (isNanoBananaFamilyModel(model)) familyTags.push('Nano Banana');
+      const meta = [];
+      if (taskCaps?.capabilitySourceLabel) meta.push(taskCaps.capabilitySourceLabel);
+      if (taskCaps?.durationOptions?.length) meta.push(`时长 ${taskCaps.durationOptions.join('/')}`);
+      if (taskCaps?.aspectRatioOptions?.length) meta.push(`比例 ${taskCaps.aspectRatioOptions.slice(0, 3).join('/')}`);
+      if (taskCaps?.supportsPromptOptimize) meta.push('提示词优化');
+      if (taskType && (taskCaps?.supportsImageToVideoReferenceImages || taskCaps?.supportsTextToVideoReferenceImages || taskCaps?.supportsTextToImageReferenceImages)) {
+        meta.push(`参考图${formatReferenceLimit(taskCaps, { singular: '仅 1 张', pluralPrefix: '最多 ' })}`);
+      }
+      if (taskType === 'image_to_video' && taskCaps?.supportsImageToVideoEndFrame) meta.push('支持尾帧');
+      const familyLine = familyTags.length
+        ? `<div class="model-card-tags">${familyTags.map((item) => `<span class="model-card-tag model-card-tag-family">${escapeHtml(item)}</span>`).join('')}</div>`
+        : '';
+      const roleLine = roles.active.length
+        ? `<div class="model-card-tags">${roles.active.map((item) => `<span class="model-card-tag">${escapeHtml(item)}</span>`).join('')}${roles.gated.map((item) => `<span class="model-card-tag model-card-tag-gated">${escapeHtml(item)}</span>`).join('')}</div>`
+        : '<div class="model-card-meta">未提取到明确能力标签</div>';
+      const metaLine = meta.length ? `<div class="model-card-meta">${escapeHtml(meta.join(' / '))}</div>` : '';
+      const detailRows = buildModelCapabilityRows(model)
+        .map((row) => `<div class="model-matrix-row">
+          <strong>${escapeHtml(row.label)}</strong>
+          <div class="model-card-tags">${row.active.map((item) => `<span class="model-card-tag">${escapeHtml(item)}</span>`).join('')}${row.gated.map((item) => `<span class="model-card-tag model-card-tag-gated">${escapeHtml(item)}</span>`).join('') || '<span class="model-card-tag model-card-tag-muted">无</span>'}</div>
+        </div>`)
+        .join('');
+      const detailBlock = `<details class="model-card-detail">
+        <summary>查看详细矩阵</summary>
+        <div class="model-matrix">${detailRows}</div>
+      </details>`;
+      return `<article class="model-card" title="${escapeAttr(model.id)}">
+        <div class="model-card-id">${escapeHtml(model.id)}</div>
+        ${familyLine}
+        ${roleLine}
+        ${metaLine}
+        ${detailBlock}
+      </article>`;
+    })
+    .join('');
+  const remain = Array.isArray(models) && models.length > limit
+    ? `<div class="model-chip model-chip-muted">+${models.length - limit}</div>`
+    : '';
+  container.innerHTML = cards + remain;
+};
+
 async function applyLoadedModels(result) {
-  state.models = Array.isArray(result?.data) ? result.data : [];
+  const allModels = Array.isArray(result?.data) ? result.data : [];
+  const focusedModels = allModels.filter((model) => isFocusedBridgeModel(model));
+  state.models = focusedModels.length ? focusedModels : allModels;
   state.modelById = new Map(state.models.map((m) => [m.id, m]));
   state.modelCapabilityViewCache = new Map();
   state.modelGroups = { image: [], video: [], other: [] };
@@ -719,6 +1184,7 @@ async function applyLoadedModels(result) {
     if (inVideo) state.modelGroups.video.push(model);
     if (!inImage && !inVideo) state.modelGroups.other.push(model);
   }
+  applyFocusedBridgeBranding(Math.max(0, allModels.length - state.models.length));
   await nextFrame();
   await renderModelPanel();
   await nextFrame();
@@ -1012,8 +1478,8 @@ function getConfigPayload() {
   const sora2ApiKey = sora2ApiKeyInput || (state.hasStoredApiKey ? '__KEEP__' : '');
   return {
     profileId: state.activeProfileId || undefined,
-    profileLabel: String(fd.get('providerLabel') || '').trim() || 'BLTCY',
-    providerLabel: String(fd.get('providerLabel') || '').trim() || 'BLTCY',
+    profileLabel: String(fd.get('providerLabel') || '').trim() || 'BLTCY Creative Bridge',
+    providerLabel: String(fd.get('providerLabel') || '').trim() || 'BLTCY Creative Bridge',
     providerType: String(fd.get('providerType') || 'compatible'),
     sora2ApiKey,
     baseUrl: String(fd.get('baseUrl') || '').trim(),
@@ -1045,7 +1511,7 @@ function renderPresets() {
     ? state.presets
     : [{
       key: 'bltcy',
-      providerLabel: 'BLTCY',
+      providerLabel: 'BLTCY Creative Bridge',
       providerType: 'compatible',
       baseUrl: 'https://api.bltcy.ai'
     }];
@@ -1057,7 +1523,7 @@ function renderPresets() {
 function applyPreset(key) {
   const preset = state.presets.find((item) => item.key === key);
   if (!preset) return;
-  setInputValue('providerLabel', preset.providerLabel || 'BLTCY');
+  setInputValue('providerLabel', preset.providerLabel || 'BLTCY Creative Bridge');
   setInputValue('providerType', preset.providerType || 'compatible');
   setInputValue('baseUrl', preset.baseUrl || 'https://api.bltcy.ai');
   setInputValue('modelsPath', preset.modelsPath || '/v1/models');
@@ -1271,9 +1737,22 @@ function rankModelForTask(taskType, model) {
 
 function sortModelsForTask(taskType, models) {
   return [...models].sort((a, b) => {
+    const normalizedTaskType = String(taskType || '').trim();
+    const aId = String(a?.id || '').toLowerCase();
+    const bId = String(b?.id || '').toLowerCase();
+    if (normalizedTaskType === 'text_to_video' || normalizedTaskType === 'image_to_video') {
+      const aFocused = isSoraFamilyModel(a) || isVeoFamilyModel(a);
+      const bFocused = isSoraFamilyModel(b) || isVeoFamilyModel(b);
+      if (aFocused !== bFocused) return aFocused ? -1 : 1;
+    }
+    if (normalizedTaskType === 'text_to_image' || normalizedTaskType === 'image_edit') {
+      const aFocused = isNanoBananaFamilyModel(a);
+      const bFocused = isNanoBananaFamilyModel(b);
+      if (aFocused !== bFocused) return aFocused ? -1 : 1;
+    }
     const rankDiff = rankModelForTask(taskType, a) - rankModelForTask(taskType, b);
     if (rankDiff !== 0) return rankDiff;
-    return String(a?.id || '').localeCompare(String(b?.id || ''));
+    return aId.localeCompare(bId);
   });
 }
 
@@ -1690,6 +2169,9 @@ function getModelCapabilities(model, taskType = currentTaskType()) {
       supportsDuration: false,
       supportsAspectRatio: false,
       supportsPromptOptimize: false,
+      capabilitySource: 'none',
+      capabilitySourceLabel: '无能力数据',
+      hasExplicitReferenceLimit: false,
       promptOptimizePath: '',
       chatCompletionsPath: '',
       docsLinks: [],
@@ -1713,6 +2195,7 @@ function getModelCapabilities(model, taskType = currentTaskType()) {
     return state.modelCapabilityViewCache.get(cacheKey);
   }
   const taskCaps = model?.catalog?.taskCapabilities?.[taskType] || {};
+  const hasTaskCapabilityRecord = Object.keys(taskCaps).length > 0;
   const caps = {
     ...(model?.catalog?.capabilities || {}),
     ...taskCaps
@@ -1720,6 +2203,7 @@ function getModelCapabilities(model, taskType = currentTaskType()) {
   const supportedTasks = getSupportedTasksForModel(model);
   const modelId = String(model?.id || '').toLowerCase();
   const inferredVideoModel = /(sora|veo|video|seedance|wan|kling|hailuo|pixverse|vidu)/.test(modelId);
+  const inferredVeoModel = isVeoFamilyModel(model);
   const inferredSupportsImageCount = /(gpt-image|dall-e)/.test(modelId);
   const qualityOptions = Array.isArray(caps.qualityOptions)
     ? caps.qualityOptions.map((item) => String(item).trim()).filter(Boolean)
@@ -1727,6 +2211,11 @@ function getModelCapabilities(model, taskType = currentTaskType()) {
   const promptOptimizePath = String(caps.promptOptimizePath || '');
   const chatCompletionsPath = String(caps.chatCompletionsPath || '');
   const supportsPromptOptimize = Boolean(caps.supportsPromptOptimize || promptOptimizePath || chatCompletionsPath);
+  const explicitDurationCapability = (
+    (Array.isArray(caps.durationOptions) && caps.durationOptions.length > 0)
+    || positiveNumberOrNull(caps.minDuration) !== null
+    || positiveNumberOrNull(caps.maxDuration) !== null
+  );
   const result = {
     supportedTasks,
     supportsSourceImage: Boolean(caps.supportsSourceImage),
@@ -1761,13 +2250,14 @@ function getModelCapabilities(model, taskType = currentTaskType()) {
       ?? ((caps.supportsCameraControls === true || inferredVideoModel) && !/omni/i.test(modelId))
     ),
     supportsDuration: Boolean(
-      caps.supportsDuration
-      || (Array.isArray(caps.durationOptions) && caps.durationOptions.length > 0)
-      || positiveNumberOrNull(caps.minDuration) !== null
-      || positiveNumberOrNull(caps.maxDuration) !== null
+      explicitDurationCapability
+      || (!inferredVeoModel && caps.supportsDuration)
     ),
     supportsAspectRatio: caps.supportsAspectRatio === true || (Array.isArray(caps.aspectRatioOptions) && caps.aspectRatioOptions.length > 0),
     supportsPromptOptimize,
+    capabilitySource: hasTaskCapabilityRecord ? 'task_catalog' : 'merged_catalog',
+    capabilitySourceLabel: hasTaskCapabilityRecord ? '任务级目录' : '合并能力',
+    hasExplicitReferenceLimit: positiveNumberOrNull(caps.maxReferenceImages) !== null,
     promptOptimizePath,
     chatCompletionsPath,
     docsLinks: Array.isArray(caps.docsLinks) ? caps.docsLinks : [],
@@ -1815,6 +2305,1639 @@ function clearImageInputHints() {
   setFieldHint(els.referenceImageHint, '');
   setFieldHint(els.endFrameHint, '');
   setFieldHint(els.omniInputHint, '');
+}
+
+function ensureVisualInputEnhancements() {
+  if (!els.soraWorkflowPanel && els.createForm) {
+    const panel = document.createElement('section');
+    panel.id = 'soraWorkflowPanel';
+    panel.className = 'sora-flow-panel';
+    panel.innerHTML = `
+      <div class="sora-flow-head">
+        <strong>创作起点</strong>
+        <span id="soraWorkflowSummary"></span>
+      </div>
+      <div class="sora-flow-grid">
+        <article class="sora-flow-card">
+          <strong>Nano Banana 生图</strong>
+          <p>把图片任务入口前置，适合文生图和图像编辑。先选任务，再补提示词、比例、尺寸与参考图。</p>
+          <div class="sora-flow-actions">
+            <button type="button" class="secondary-button" data-action="workflow-task-text-image">切到文生图</button>
+            <button type="button" class="secondary-button" data-action="workflow-task-image-edit">切到图片编辑</button>
+          </div>
+        </article>
+        <article class="sora-flow-card">
+          <strong>文生视频</strong>
+          <p>从一句完整创意开始，适合先确定镜头气质、时长和画幅，再逐步加分镜或约束。</p>
+          <div class="sora-flow-actions">
+            <button type="button" class="secondary-button" data-action="workflow-task-text-video">切到文生视频</button>
+            <button type="button" class="secondary-button" data-action="workflow-mode-standard">标准模式</button>
+            <button type="button" class="secondary-button" data-action="workflow-mode-storyboard">故事板模式</button>
+          </div>
+        </article>
+        <article class="sora-flow-card">
+          <strong>图生视频</strong>
+          <p>先排输入图序列，再补 prompt。第 1 张决定起始画面，后续图片负责主体、风格和镜头参考。</p>
+          <div class="sora-flow-actions">
+            <button type="button" class="secondary-button" data-action="workflow-task-image-video">切到图生视频</button>
+            <button type="button" class="secondary-button" data-action="workflow-seed-prompt">填入示例提示</button>
+            <button type="button" class="secondary-button" data-action="workflow-seed-storyboard">填入分镜骨架</button>
+          </div>
+        </article>
+      </div>`;
+    els.createForm.insertBefore(panel, els.createForm.firstChild);
+    els.soraWorkflowPanel = panel;
+    els.soraWorkflowSummary = panel.querySelector('#soraWorkflowSummary');
+    const flowGrid = panel.querySelector('.sora-flow-grid');
+    if (flowGrid) {
+      const veoCard = document.createElement('article');
+      veoCard.className = 'sora-flow-card';
+      veoCard.innerHTML = `
+        <strong>Veo Prompt-first</strong>
+        <p>先写清主体、动作、镜头和节奏，再用模型提示词优化把动作节奏、镜头目标和整体叙事整理成更适合 Veo 的视频指令。</p>
+        <div class="sora-flow-actions">
+          <button type="button" class="secondary-button" data-action="workflow-task-text-video">切到文生视频</button>
+          <button type="button" class="secondary-button" data-action="workflow-seed-prompt">填入 Veo 示例</button>
+          <button type="button" class="secondary-button" data-action="workflow-optimize-prompt">优化当前 Prompt</button>
+        </div>`;
+      const imageVideoCard = flowGrid.querySelectorAll('.sora-flow-card')[2];
+      if (imageVideoCard) {
+        flowGrid.insertBefore(veoCard, imageVideoCard);
+      } else {
+        flowGrid.appendChild(veoCard);
+      }
+    }
+  }
+  if (!els.soraSubmitPanel && els.fieldGuidePanel?.parentElement) {
+    const panel = document.createElement('section');
+    panel.id = 'soraSubmitPanel';
+    panel.className = 'sora-submit-panel';
+    panel.innerHTML = `
+      <strong>提交摘要</strong>
+      <div id="soraSubmitSummary" class="sora-submit-panel-summary"></div>
+      <div id="soraSubmitTags" class="sora-submit-tags"></div>`;
+    els.fieldGuidePanel.insertAdjacentElement('afterend', panel);
+    els.soraSubmitPanel = panel;
+    els.soraSubmitSummary = panel.querySelector('#soraSubmitSummary');
+    els.soraSubmitTags = panel.querySelector('#soraSubmitTags');
+  }
+  if (!els.reuseSummaryPanel && els.soraSubmitPanel?.parentElement) {
+    const panel = document.createElement('section');
+    panel.id = 'reuseSummaryPanel';
+    panel.className = 'reuse-summary-panel hidden';
+    panel.innerHTML = `
+      <strong>复用结果</strong>
+      <div id="reuseSummaryText" class="reuse-summary-text"></div>
+      <div id="reuseSummaryTags" class="reuse-summary-tags"></div>`;
+    els.soraSubmitPanel.insertAdjacentElement('afterend', panel);
+    els.reuseSummaryPanel = panel;
+    els.reuseSummaryText = panel.querySelector('#reuseSummaryText');
+    els.reuseSummaryTags = panel.querySelector('#reuseSummaryTags');
+  }
+  if (!els.imageToVideoPromptGuide && els.prompt?.parentElement) {
+    const panel = document.createElement('section');
+    panel.id = 'imageToVideoPromptGuide';
+    panel.className = 'prompt-guide-panel hidden';
+    panel.innerHTML = `
+      <strong>提示词如何与图片配合</strong>
+      <div id="imageToVideoPromptSummary" class="prompt-guide-summary"></div>
+      <div class="prompt-guide-grid">
+        <article class="prompt-guide-card">
+          <strong>第 1 张输入图</strong>
+          <p>决定起始画面。提示词不要重复描述这张图里已经明确可见的内容，重点补“运动、镜头、节奏、氛围、结尾”。</p>
+        </article>
+        <article class="prompt-guide-card">
+          <strong>第 2-N 张参考图</strong>
+          <p>用于约束主体一致性、服装、风格、场景元素或镜头倾向。提示词里要明确说明“保持与参考图一致”的对象是什么。</p>
+        </article>
+        <article class="prompt-guide-card">
+          <strong>推荐写法</strong>
+          <p>让第 1 张画面中的人物开始走向镜头，保持与附加参考图一致的红色夹克、发型和面部特征，镜头缓慢推进，结尾停在半身近景。</p>
+        </article>
+      </div>`;
+    els.prompt.parentElement.insertAdjacentElement('afterend', panel);
+    els.imageToVideoPromptGuide = panel;
+    els.imageToVideoPromptSummary = panel.querySelector('#imageToVideoPromptSummary');
+  }
+  if (!els.promptOptimizePanel && els.prompt?.parentElement) {
+    const panel = document.createElement('section');
+    panel.id = 'promptOptimizePanel';
+    panel.className = 'prompt-optimize-panel hidden';
+    panel.innerHTML = `
+      <div class="prompt-optimize-head">
+        <strong>模型提示词优化</strong>
+        <span id="promptOptimizeSummary" class="prompt-optimize-summary"></span>
+      </div>
+      <div class="prompt-optimize-actions">
+        <button type="button" id="optimizePromptWithModel" class="secondary-button">按当前模型优化提示词</button>
+        <span id="promptOptimizeStatus" class="inline-hint hidden"></span>
+      </div>`;
+    els.prompt.parentElement.insertAdjacentElement('afterend', panel);
+    els.promptOptimizePanel = panel;
+    els.optimizePromptWithModel = panel.querySelector('#optimizePromptWithModel');
+    els.promptOptimizeSummary = panel.querySelector('#promptOptimizeSummary');
+    els.promptOptimizeStatus = panel.querySelector('#promptOptimizeStatus');
+  }
+  if (!els.capabilityFieldLayout && els.soraSubmitPanel?.parentElement) {
+    const panel = document.createElement('section');
+    panel.id = 'capabilityFieldLayout';
+    panel.className = 'capability-layout';
+    panel.innerHTML = `
+      <div class="capability-layout-head">
+        <strong>能力驱动表单结构</strong>
+        <span>当前模型的字段按基础、高级、专家三层整理，避免整页字段混在一起。</span>
+      </div>
+      <div class="capability-layout-grid">
+        <section class="capability-column">
+          <div class="capability-column-head">
+            <strong>基础项</strong>
+            <span>进入提交前必须先看清这一层</span>
+          </div>
+          <div id="capabilityBasicFields" class="capability-field-list"></div>
+        </section>
+        <details class="capability-column">
+          <summary class="capability-column-head">
+            <strong>高级项</strong>
+            <span>在明确知道效果影响时再展开</span>
+          </summary>
+          <div id="capabilityAdvancedFields" class="capability-field-list"></div>
+        </details>
+        <details class="capability-column">
+          <summary class="capability-column-head">
+            <strong>专家项</strong>
+            <span>复现、调参和对比时再打开</span>
+          </summary>
+          <div id="capabilityExpertFields" class="capability-field-list"></div>
+        </details>
+      </div>`;
+    els.soraSubmitPanel.insertAdjacentElement('afterend', panel);
+    els.capabilityFieldLayout = panel;
+    els.capabilityBasicFields = panel.querySelector('#capabilityBasicFields');
+    els.capabilityAdvancedFields = panel.querySelector('#capabilityAdvancedFields');
+    els.capabilityExpertFields = panel.querySelector('#capabilityExpertFields');
+  }
+  if (!els.taskComparePanel && els.tasks?.parentElement) {
+    const panel = document.createElement('section');
+    panel.id = 'taskComparePanel';
+    panel.className = 'task-compare-panel hidden';
+    panel.innerHTML = `
+      <div class="task-compare-head">
+        <strong>任务对比</strong>
+        <div class="config-actions">
+          <button type="button" class="secondary-button" data-action="task-compare-clear">清空对比</button>
+        </div>
+      </div>
+      <div id="taskCompareSummary" class="task-compare-summary"></div>
+      <div id="taskCompareGrid" class="task-compare-grid"></div>`;
+    els.tasks.insertAdjacentElement('beforebegin', panel);
+    els.taskComparePanel = panel;
+    els.taskCompareSummary = panel.querySelector('#taskCompareSummary');
+    els.taskCompareGrid = panel.querySelector('#taskCompareGrid');
+  }
+  if (els.referenceImageUrl && els.referenceImageUrl.tagName !== 'TEXTAREA') {
+    const textarea = document.createElement('textarea');
+    textarea.id = els.referenceImageUrl.id;
+    textarea.name = els.referenceImageUrl.name;
+    textarea.placeholder = els.referenceImageUrl.placeholder;
+    textarea.rows = 4;
+    textarea.value = els.referenceImageUrl.value;
+    els.referenceImageUrl.replaceWith(textarea);
+    els.referenceImageUrl = textarea;
+  }
+  if (!els.imageToVideoInputPanel && els.referenceImageHint?.parentElement) {
+    const panel = document.createElement('div');
+    panel.id = 'imageToVideoInputPanel';
+    panel.className = 'image-input-panel hidden';
+    panel.innerHTML = `
+      <div class="image-input-panel-head">
+        <strong>图生视频输入结构</strong>
+        <span id="imageToVideoInputSummary" class="image-input-panel-meta"></span>
+      </div>
+      <div class="image-input-panel-grid">
+        <article class="image-input-card">
+          <span class="image-input-card-kicker">Step 1</span>
+          <strong>主图 / 首帧</strong>
+          <p>放 1 张主输入图。Sora2 会把它作为视频起始画面。</p>
+        </article>
+        <article class="image-input-card">
+          <span class="image-input-card-kicker">Step 2</span>
+          <strong>附加参考图</strong>
+          <p>其余图片放到“附加参考图 URL”或“本地附加参考图”。URL 支持一行一张，本地上传支持多选。</p>
+        </article>
+      </div>`;
+    els.referenceImageHint.insertAdjacentElement('afterend', panel);
+    els.imageToVideoInputPanel = panel;
+    els.imageToVideoInputSummary = panel.querySelector('#imageToVideoInputSummary');
+  }
+  if (els.referenceUploadInput) {
+    els.referenceUploadInput.multiple = true;
+  }
+  const decorateCard = (labelEl, variant, badgeText) => {
+    if (!labelEl) return;
+    labelEl.classList.add('visual-input-card', `visual-input-card-${variant}`);
+    let badge = labelEl.querySelector('.visual-input-badge');
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'visual-input-badge';
+      labelEl.insertBefore(badge, labelEl.firstChild);
+    }
+    badge.textContent = badgeText;
+  };
+  decorateCard(els.sourceImageWrap, 'primary', '主图');
+  decorateCard(els.sourceAssetWrap, 'primary', '主图');
+  decorateCard(els.sourceUploadWrap, 'primary', '主图');
+  decorateCard(els.referenceImageWrap, 'reference', '附加图');
+  decorateCard(els.referenceAssetWrap, 'reference', '附加图');
+  decorateCard(els.referenceUploadWrap, 'reference', '附加图');
+  const ensureHelp = (wrapEl, id) => {
+    if (!wrapEl) return null;
+    let help = document.getElementById(id);
+    if (!help) {
+      help = document.createElement('span');
+      help.id = id;
+      help.className = 'inline-hint';
+      wrapEl.appendChild(help);
+    }
+    return help;
+  };
+  els.referenceAssetHelp = ensureHelp(els.referenceAssetWrap, 'referenceAssetHelp');
+  els.referenceUploadHelp = ensureHelp(els.referenceUploadWrap, 'referenceUploadHelp');
+  if (!els.imageToVideoSequenceWorkspace && els.imageToVideoInputPanel?.parentElement) {
+    const workspace = document.createElement('section');
+    workspace.id = 'imageToVideoSequenceWorkspace';
+    workspace.className = 'image-sequence-workspace hidden';
+    workspace.innerHTML = `
+      <div class="image-sequence-head">
+        <div>
+          <strong>输入图序列</strong>
+          <span>第 1 张决定起始画面，后续图片按顺序作为附加参考输入。</span>
+        </div>
+        <div class="image-sequence-actions">
+          <button type="button" class="secondary-button" data-action="sequence-upload-primary">上传第 1 张</button>
+          <button type="button" class="secondary-button" data-action="sequence-upload-reference">上传附加图</button>
+          <button type="button" class="secondary-button" data-action="sequence-add-url">加入图片 URL</button>
+          <button type="button" class="secondary-button" data-action="sequence-clear-all">清空序列</button>
+        </div>
+      </div>
+      <div id="imageToVideoSequenceList" class="image-sequence-list"></div>`;
+    els.imageToVideoInputPanel.insertAdjacentElement('afterend', workspace);
+    els.imageToVideoSequenceWorkspace = workspace;
+  }
+  if (!els.imageToVideoLocalWorkspace && els.imageToVideoInputPanel?.parentElement) {
+    const workspace = document.createElement('section');
+    workspace.id = 'imageToVideoLocalWorkspace';
+    workspace.className = 'local-image-workspace hidden';
+    workspace.innerHTML = `
+      <div class="local-image-workspace-head">
+        <strong>本地图片工作区</strong>
+        <span>上传、选中、移除都在这里完成</span>
+      </div>
+      <div class="local-image-grid">
+        <section class="local-image-lane local-image-lane-primary">
+          <div class="local-image-lane-head">
+            <strong>主图 / 首帧</strong>
+            <span>这里始终只有 1 张，本地上传后会自动设为主图。</span>
+          </div>
+          <div class="local-image-actions">
+            <button type="button" class="secondary-button" data-action="workspace-upload-source">上传主图</button>
+            <button type="button" class="secondary-button" data-action="workspace-clear-source">清空主图</button>
+          </div>
+          <div id="workspaceSourceSelection" class="local-image-selection"></div>
+        </section>
+        <section class="local-image-lane local-image-lane-reference">
+          <div class="local-image-lane-head">
+            <strong>本地附加参考图</strong>
+            <span>可上传多张；支持拖拽排序；也可以在下方素材库点击“设为参考图”。</span>
+          </div>
+          <div class="local-image-actions">
+            <button type="button" class="secondary-button" data-action="workspace-upload-reference">上传附加图</button>
+            <button type="button" class="secondary-button" data-action="workspace-clear-reference">清空附加图</button>
+          </div>
+          <div id="workspaceReferenceSelection" class="local-image-selection"></div>
+        </section>
+      </div>`;
+    els.imageToVideoInputPanel.insertAdjacentElement('afterend', workspace);
+    els.imageToVideoLocalWorkspace = workspace;
+  }
+  if (!els.imageToVideoUrlWorkspace && els.imageToVideoLocalWorkspace?.parentElement) {
+    const workspace = document.createElement('section');
+    workspace.id = 'imageToVideoUrlWorkspace';
+    workspace.className = 'local-image-workspace hidden';
+    workspace.innerHTML = `
+      <div class="local-image-workspace-head">
+        <strong>URL 图片工作区</strong>
+        <span>把远程图片也当成输入序列来管理</span>
+      </div>
+      <div class="local-image-grid">
+        <section class="local-image-lane local-image-lane-primary local-image-lane-url">
+          <div class="local-image-lane-head">
+            <strong>主图 URL</strong>
+            <span>如果你不用本地主图，可以直接把第 1 张输入图写成 URL。</span>
+          </div>
+          <div class="local-image-actions">
+            <button type="button" class="secondary-button" data-action="workspace-set-source-url">设置主图 URL</button>
+            <button type="button" class="secondary-button" data-action="workspace-clear-source-url">清空主图 URL</button>
+          </div>
+          <div id="workspaceSourceUrlSelection" class="local-image-selection"></div>
+        </section>
+        <section class="local-image-lane local-image-lane-reference local-image-lane-url">
+          <div class="local-image-lane-head">
+            <strong>附加参考图 URL</strong>
+            <span>支持添加多条、拖拽排序、设为第 1 张。</span>
+          </div>
+          <div class="local-image-actions">
+            <button type="button" class="secondary-button" data-action="workspace-add-reference-url">添加附加图 URL</button>
+            <button type="button" class="secondary-button" data-action="workspace-clear-reference-url">清空附加图 URL</button>
+          </div>
+          <div id="workspaceReferenceUrlSelection" class="local-image-selection"></div>
+        </section>
+      </div>`;
+    els.imageToVideoLocalWorkspace.insertAdjacentElement('afterend', workspace);
+    els.imageToVideoUrlWorkspace = workspace;
+  }
+}
+
+function updateSoraWorkflowPanel(taskType, caps, generationMode) {
+  if (!els.soraWorkflowPanel || !els.soraWorkflowSummary) return;
+  const model = currentModel();
+  const modelId = String(model?.id || '').trim() || '未选择模型';
+  const taskLabel = getTaskDisplayLabel(taskType);
+  const summaryBits = [`任务 ${taskLabel}`, `模型 ${modelId}`, `入口 ${getTaskPromptModeLabel(taskType)}`];
+  if ((taskType === 'text_to_video' || taskType === 'image_to_video') && generationMode === 'storyboard') {
+    summaryBits.push('当前为故事板模式');
+  }
+  if ((taskType === 'text_to_video' || taskType === 'image_to_video') && generationMode === 'intelligent') {
+    summaryBits.push('当前为智能分镜模式');
+  }
+  if ((taskType === 'text_to_video' || taskType === 'image_to_video') && caps.durationOptions?.length) {
+    summaryBits.push(`时长 ${caps.durationOptions.join('/')}`);
+  } else if ((taskType === 'text_to_video' || taskType === 'image_to_video') && caps.supportsDuration === true) {
+    summaryBits.push('支持自定义时长');
+  }
+  if (caps.aspectRatioOptions?.length) summaryBits.push(`比例 ${caps.aspectRatioOptions.slice(0, 3).join('/')}`);
+  els.soraWorkflowSummary.textContent = summaryBits.join(' / ');
+  Array.from(els.soraWorkflowPanel.querySelectorAll('[data-action]')).forEach((button) => {
+    const action = String(button.dataset.action || '');
+    const active = (
+      (action === 'workflow-task-text-image' && taskType === 'text_to_image')
+      || (action === 'workflow-task-image-edit' && taskType === 'image_edit')
+      || (action === 'workflow-task-text-video' && taskType === 'text_to_video')
+      || (action === 'workflow-task-image-video' && taskType === 'image_to_video')
+      || (action === 'workflow-mode-standard' && generationMode === 'standard')
+      || (action === 'workflow-mode-storyboard' && generationMode === 'storyboard')
+    );
+    button.dataset.flowActive = active ? 'true' : 'false';
+  });
+}
+
+function updateSoraSubmitPanel(taskType, caps, generationMode) {
+  const taskLabelMap = {
+    text_to_image: '文生图',
+    image_edit: '图片编辑',
+    text_to_video: '文生视频',
+    image_to_video: '图生视频'
+  };
+  if (!els.soraSubmitPanel || !els.soraSubmitSummary || !els.soraSubmitTags) return;
+  const model = currentModel();
+  const taskLabel = taskType === 'image_to_video' ? '图生视频' : '文生视频';
+  const normalizedTaskLabel = taskLabelMap[taskType] || taskType;
+  const promptLength = String(els.prompt?.value || '').trim().length;
+  const sequenceSummary = taskType === 'image_to_video' ? getImageToVideoInputSequenceSummary() : null;
+  const hasPrimary = Boolean(sequenceSummary?.primary);
+  const duration = String(els.durationHidden?.value || els.durationInput?.value || '').trim();
+  const aspectRatio = String(els.aspectRatio?.value || '').trim();
+  const summary = taskType === 'image_to_video'
+    ? `当前将以 ${hasPrimary ? '主图 + 参考图序列' : '待补充主图'} 提交到 ${String(model?.id || 'Sora')}${generationMode !== 'standard' ? `，模式为 ${generationMode}` : ''}。`
+    : `当前将以 prompt 驱动 ${String(model?.id || 'Sora')} 生成视频${generationMode !== 'standard' ? `，模式为 ${generationMode}` : ''}。`;
+  els.soraSubmitSummary.textContent = summary;
+  const tags = [];
+  tags.push({ text: `任务 ${normalizedTaskLabel}` });
+  tags.push({ text: `任务 ${taskLabel}` });
+  if (promptLength) tags.push({ text: `Prompt ${promptLength} 字` });
+  else if (taskType === 'text_to_video' && generationMode !== 'storyboard') tags.push({ text: '缺少 Prompt', warning: true });
+  if (taskType === 'image_to_video') {
+    tags.push({ text: hasPrimary ? '已设置第 1 张输入图' : '缺少第 1 张输入图', warning: !hasPrimary });
+    tags.push({ text: `附加图 ${sequenceSummary?.referenceCount || 0} 张` });
+  }
+  if (generationMode === 'storyboard') {
+    const shotCount = storyboardShotsFromEditor().length;
+    tags.push({ text: shotCount ? `分镜 ${shotCount} 个镜头` : '缺少分镜内容', warning: shotCount === 0 });
+  }
+  if (duration) tags.push({ text: `时长 ${duration}s` });
+  else if (caps.durationOptions?.length) tags.push({ text: `可选时长 ${caps.durationOptions.join('/')}` });
+  if (aspectRatio) tags.push({ text: `比例 ${aspectRatio}` });
+  const uniqueTags = tags.filter((tag, index) => tags.findIndex((item) => `${item.text}|${Boolean(item.warning)}` === `${tag.text}|${Boolean(tag.warning)}`) === index);
+  els.soraSubmitTags.innerHTML = uniqueTags
+    .map((tag) => `<span class="sora-submit-tag${tag.warning ? ' sora-submit-tag-warning' : ''}">${escapeHtml(tag.text)}</span>`)
+    .join('');
+}
+
+function updateBridgeSubmitPanel(taskType, caps, generationMode) {
+  if (!els.soraSubmitPanel || !els.soraSubmitSummary || !els.soraSubmitTags) return;
+  const model = currentModel();
+  const taskLabel = getTaskDisplayLabel(taskType);
+  const promptLength = String(els.prompt?.value || '').trim().length;
+  const sequenceSummary = taskType === 'image_to_video' ? getImageToVideoInputSequenceSummary() : null;
+  const hasPrimary = Boolean(sequenceSummary?.primary);
+  const hasSourceImage = hasSourceVisualInput(taskType);
+  const duration = String(els.durationHidden?.value || els.durationInput?.value || '').trim();
+  const aspectRatio = String(els.aspectRatio?.value || '').trim();
+  const modelId = String(model?.id || (taskType === 'text_to_image' || taskType === 'image_edit' ? 'Nano Banana' : 'Sora'));
+
+  let summary = '';
+  if (taskType === 'text_to_image') {
+    summary = `当前将以 Prompt 提交到 ${modelId} 生成图片${aspectRatio ? `，目标比例为 ${aspectRatio}` : ''}。`;
+  } else if (taskType === 'image_edit') {
+    summary = `当前将以 ${hasSourceImage ? '原图 + Prompt' : '待补原图'} 提交到 ${modelId} 做图片编辑${aspectRatio ? `，目标比例为 ${aspectRatio}` : ''}。`;
+  } else if (taskType === 'image_to_video') {
+    summary = `当前将以 ${hasPrimary ? '第 1 张输入图 + 参考图序列' : '待补第 1 张输入图'} 提交到 ${modelId} 生成视频${generationMode !== 'standard' ? `，模式为 ${generationMode}` : ''}。`;
+  } else {
+    summary = `当前将以 Prompt 提交到 ${modelId} 生成视频${generationMode !== 'standard' ? `，模式为 ${generationMode}` : ''}。`;
+  }
+  els.soraSubmitSummary.textContent = summary;
+
+  const tags = [{ text: `任务 ${taskLabel}` }];
+  if (promptLength) tags.push({ text: `Prompt ${promptLength} 字` });
+  else if ((taskType === 'text_to_video' || taskType === 'text_to_image') && generationMode !== 'storyboard') tags.push({ text: '缺少 Prompt', warning: true });
+  else if (taskType === 'image_edit' || taskType === 'image_to_video') tags.push({ text: '建议补充 Prompt 约束动作或改图目标' });
+
+  if (taskType === 'image_to_video') {
+    tags.push({ text: hasPrimary ? '已设置第 1 张输入图' : '缺少第 1 张输入图', warning: !hasPrimary });
+    tags.push({ text: `附加图 ${sequenceSummary?.referenceCount || 0} 张` });
+  }
+  if (taskType === 'image_edit') {
+    tags.push({ text: hasSourceImage ? '已设置待编辑原图' : '缺少待编辑原图', warning: !hasSourceImage });
+  }
+  if (generationMode === 'storyboard') {
+    const shotCount = storyboardShotsFromEditor().length;
+    tags.push({ text: shotCount ? `分镜 ${shotCount} 个镜头` : '缺少分镜内容', warning: shotCount === 0 });
+  }
+  if (duration) tags.push({ text: `时长 ${duration}s` });
+  else if ((taskType === 'text_to_video' || taskType === 'image_to_video') && caps.durationOptions?.length) tags.push({ text: `可选时长 ${caps.durationOptions.join('/')}` });
+  if (aspectRatio) tags.push({ text: `比例 ${aspectRatio}` });
+
+  const uniqueTags = tags.filter((tag, index) => tags.findIndex((item) => `${item.text}|${Boolean(item.warning)}` === `${tag.text}|${Boolean(tag.warning)}`) === index);
+  els.soraSubmitTags.innerHTML = uniqueTags
+    .map((tag) => `<span class="sora-submit-tag${tag.warning ? ' sora-submit-tag-warning' : ''}">${escapeHtml(tag.text)}</span>`)
+    .join('');
+}
+
+function getBridgeVideoModelFamilyLabel(model) {
+  if (isVeoFamilyModel(model)) return 'Veo';
+  if (isSoraFamilyModel(model)) return 'Sora';
+  return 'Video';
+}
+
+function formatReferenceLimit(caps, { singular = '仅 1 张', pluralPrefix = '最多 ' } = {}) {
+  if (!caps?.supportsMultipleReferenceImages) return singular;
+  if (caps.hasExplicitReferenceLimit && caps.maxReferenceImages) return `${pluralPrefix}${caps.maxReferenceImages} 张`;
+  return '上限未声明';
+}
+
+function getImageSequenceSubmissionSummary(caps) {
+  const summary = getImageToVideoInputSequenceSummary();
+  const primaryReady = Boolean(summary?.primary);
+  const submittedReferenceCount = caps.supportsImageToVideoReferenceImages ? Number(summary?.referenceCount || 0) : 0;
+  return {
+    primaryReady,
+    totalReferenceCount: Number(summary?.referenceCount || 0),
+    submittedReferenceCount,
+    droppedReferenceCount: Math.max(0, Number(summary?.referenceCount || 0) - submittedReferenceCount)
+  };
+}
+
+updateBridgeSubmitPanel = function updateBridgeSubmitPanel(taskType, caps, generationMode) {
+  if (!els.soraSubmitPanel || !els.soraSubmitSummary || !els.soraSubmitTags) return;
+  const model = currentModel();
+  const taskLabel = getTaskDisplayLabel(taskType);
+  const promptLength = String(els.prompt?.value || '').trim().length;
+  const sequenceSummary = taskType === 'image_to_video' ? getImageToVideoInputSequenceSummary() : null;
+  const imageSequence = taskType === 'image_to_video' ? getImageSequenceSubmissionSummary(caps) : null;
+  const hasPrimary = Boolean(sequenceSummary?.primary);
+  const hasSourceImage = hasSourceVisualInput(taskType);
+  const duration = String(els.durationHidden?.value || els.durationInput?.value || '').trim();
+  const aspectRatio = String(els.aspectRatio?.value || '').trim();
+  const modelId = String(model?.id || (taskType === 'text_to_image' || taskType === 'image_edit' ? 'Nano Banana' : 'Sora'));
+  const videoFamily = getBridgeVideoModelFamilyLabel(model);
+  const endFrameReady = Boolean(String(els.endFrameImageUrl?.value || '').trim() || String(els.endFrameAssetSelect?.value || '').trim());
+
+  let summary = '';
+  if (taskType === 'text_to_image') {
+    summary = `当前会把 Prompt 提交给 ${modelId} 生成图片${aspectRatio ? `，目标比例为 ${aspectRatio}` : ''}。`;
+  } else if (taskType === 'image_edit') {
+    summary = `当前会把 ${hasSourceImage ? '原图 + Prompt' : '待补原图'} 提交给 ${modelId} 做图片编辑${aspectRatio ? `，目标比例为 ${aspectRatio}` : ''}。`;
+  } else if (taskType === 'image_to_video') {
+    if (isVeoFamilyModel(model)) {
+      summary = imageSequence?.primaryReady
+        ? `当前会把第 1 张输入图作为 ${videoFamily} 的起始画面提交${imageSequence.submittedReferenceCount ? `，并附带 ${imageSequence.submittedReferenceCount} 张参考图` : ''}${caps.supportsImageToVideoEndFrame && endFrameReady ? '，尾帧也会一起提交' : ''}。`
+        : `当前是 ${videoFamily} 图生视频，但还缺少第 1 张输入图，提交后不会得到稳定的起始画面。`;
+    } else {
+      summary = `当前会把 ${hasPrimary ? '第 1 张输入图 + 参考图序列' : '待补第 1 张输入图'} 提交给 ${modelId} 生成视频${generationMode !== 'standard' ? `，模式为 ${generationMode}` : ''}。`;
+    }
+  } else if (isVeoFamilyModel(model)) {
+    summary = `当前会用 Prompt 驱动 ${videoFamily} 文生视频${caps.supportsTextToVideoReferenceImages ? '；参考图只会作为主体或风格约束，不会当作首帧' : ''}${caps.supportsPromptOptimize ? '；提交前可先做模型提示词优化。' : '。'}`;
+  } else {
+    summary = `当前会把 Prompt 提交给 ${modelId} 生成视频${generationMode !== 'standard' ? `，模式为 ${generationMode}` : ''}。`;
+  }
+  els.soraSubmitSummary.textContent = summary;
+
+  const tags = [{ text: `任务 ${taskLabel}` }];
+  if (taskType === 'text_to_video' || taskType === 'image_to_video') tags.push({ text: `视频家族 ${videoFamily}` });
+  if (promptLength) tags.push({ text: `Prompt ${promptLength} 字` });
+  else if ((taskType === 'text_to_video' || taskType === 'text_to_image') && generationMode !== 'storyboard') tags.push({ text: '缺少 Prompt', warning: true });
+  else if (taskType === 'image_edit' || taskType === 'image_to_video') tags.push({ text: '建议补充 Prompt 约束动作或改图目标' });
+
+  if (taskType === 'image_to_video') {
+    tags.push({ text: hasPrimary ? '已设置第 1 张输入图' : '缺少第 1 张输入图', warning: !hasPrimary });
+    if (caps.supportsImageToVideoReferenceImages) {
+      tags.push({ text: `参考图提交 ${imageSequence?.submittedReferenceCount || 0} 张` });
+    } else {
+      tags.push({ text: '参考图不会提交', warning: Boolean(sequenceSummary?.referenceCount) });
+    }
+    if (caps.supportsImageToVideoEndFrame) {
+      tags.push({ text: endFrameReady ? '尾帧会提交' : '未设置尾帧' });
+    } else {
+      tags.push({ text: '不支持尾帧' });
+    }
+    if (imageSequence?.droppedReferenceCount) {
+      tags.push({ text: `${imageSequence.droppedReferenceCount} 张参考图当前不会发送`, warning: true });
+    }
+  }
+  if (taskType === 'image_edit') {
+    tags.push({ text: hasSourceImage ? '已设置待编辑原图' : '缺少待编辑原图', warning: !hasSourceImage });
+  }
+  if (taskType === 'text_to_video') {
+    tags.push({ text: caps.supportsTextToVideoReferenceImages ? '参考图仅作约束' : '无参考图输入' });
+    if (caps.supportsPromptOptimize) tags.push({ text: '支持提示词优化' });
+  }
+  if (generationMode === 'storyboard') {
+    const shotCount = storyboardShotsFromEditor().length;
+    tags.push({ text: shotCount ? `分镜 ${shotCount} 个镜头` : '缺少分镜内容', warning: shotCount === 0 });
+  }
+  if (duration) tags.push({ text: `时长 ${duration}s` });
+  else if ((taskType === 'text_to_video' || taskType === 'image_to_video') && caps.durationOptions?.length) tags.push({ text: `可选时长 ${caps.durationOptions.join('/')}` });
+  if (aspectRatio) tags.push({ text: `比例 ${aspectRatio}` });
+
+  const uniqueTags = tags.filter((tag, index) => tags.findIndex((item) => `${item.text}|${Boolean(item.warning)}` === `${tag.text}|${Boolean(tag.warning)}`) === index);
+  els.soraSubmitTags.innerHTML = uniqueTags
+    .map((tag) => `<span class="sora-submit-tag${tag.warning ? ' sora-submit-tag-warning' : ''}">${escapeHtml(tag.text)}</span>`)
+    .join('');
+};
+
+updateImageToVideoPromptGuide = function updateImageToVideoPromptGuide() {
+  if (!els.imageToVideoPromptGuide || !els.imageToVideoPromptSummary) return;
+  const taskType = String(els.typeSelect?.value || '');
+  const visible = taskType === 'image_to_video';
+  showElement(els.imageToVideoPromptGuide, visible);
+  if (!visible) return;
+  const title = els.imageToVideoPromptGuide.querySelector('strong');
+  if (title) title.textContent = '图像提示';
+  const cards = Array.from(els.imageToVideoPromptGuide.querySelectorAll('.prompt-guide-card'));
+  if (cards[0]) {
+    const cardTitle = cards[0].querySelector('strong');
+    const cardCopy = cards[0].querySelector('p');
+    if (cardTitle) cardTitle.textContent = '第 1 张';
+    if (cardCopy) cardCopy.textContent = '决定起始画面。';
+  }
+  if (cards[1]) {
+    const cardTitle = cards[1].querySelector('strong');
+    const cardCopy = cards[1].querySelector('p');
+    if (cardTitle) cardTitle.textContent = '参考图';
+    if (cardCopy) cardCopy.textContent = '只作主体或风格约束。';
+  }
+  if (cards[2]) {
+    const cardTitle = cards[2].querySelector('strong');
+    const cardCopy = cards[2].querySelector('p');
+    if (cardTitle) cardTitle.textContent = 'Prompt';
+    if (cardCopy) cardCopy.textContent = '重点写动作、镜头和节奏。';
+  }
+  ensureImageToVideoSequenceState();
+  const caps = getModelCapabilities(currentModel(), taskType);
+  const model = currentModel();
+  const family = getBridgeVideoModelFamilyLabel(model);
+  const submission = getImageSequenceSubmissionSummary(caps);
+  const promptLength = String(els.prompt?.value || '').trim().length;
+  const endFrameReady = Boolean(String(els.endFrameImageUrl?.value || '').trim() || String(els.endFrameAssetSelect?.value || '').trim());
+  const primaryLabel = submission.primaryReady ? '已设置第 1 张输入图' : '尚未设置第 1 张输入图';
+  const referenceLabel = caps.supportsImageToVideoReferenceImages
+    ? `参考图将提交 ${submission.submittedReferenceCount} 张`
+    : `参考图不会提交${submission.totalReferenceCount ? `（当前有 ${submission.totalReferenceCount} 张）` : ''}`;
+  const endFrameLabel = caps.supportsImageToVideoEndFrame
+    ? (endFrameReady ? '尾帧会提交' : '可选尾帧未设置')
+    : '当前模型不支持尾帧';
+  const promptLabel = promptLength ? `Prompt ${promptLength} 字` : (caps.supportsPromptOptimize ? '建议先写 Prompt 再做模型优化' : '建议补一段运动/镜头提示词');
+  els.imageToVideoPromptSummary.textContent = `${family} / ${primaryLabel} / ${referenceLabel} / ${endFrameLabel} / ${promptLabel}`;
+};
+
+updateBridgeSubmitPanel = function updateBridgeSubmitPanel(taskType, caps, generationMode) {
+  if (!els.soraSubmitPanel || !els.soraSubmitSummary || !els.soraSubmitTags) return;
+  const model = currentModel();
+  const taskLabel = getTaskDisplayLabel(taskType);
+  const promptLength = String(els.prompt?.value || '').trim().length;
+  const sequenceSummary = taskType === 'image_to_video' ? getImageToVideoInputSequenceSummary() : null;
+  const imageSequence = taskType === 'image_to_video' ? getImageSequenceSubmissionSummary(caps) : null;
+  const hasPrimary = Boolean(sequenceSummary?.primary);
+  const hasSourceImage = hasSourceVisualInput(taskType);
+  const duration = String(els.durationHidden?.value || els.durationInput?.value || '').trim();
+  const aspectRatio = String(els.aspectRatio?.value || '').trim();
+  const modelId = String(model?.id || (taskType === 'text_to_image' || taskType === 'image_edit' ? 'Nano Banana' : 'Sora'));
+  const videoFamily = getBridgeVideoModelFamilyLabel(model);
+  const endFrameReady = Boolean(String(els.endFrameImageUrl?.value || '').trim() || String(els.endFrameAssetSelect?.value || '').trim());
+
+  let summary = '';
+  if (taskType === 'text_to_image') {
+    summary = `当前会把 Prompt 提交给 ${modelId} 生成图片${aspectRatio ? `，目标比例为 ${aspectRatio}` : ''}。`;
+  } else if (taskType === 'image_edit') {
+    summary = `当前会把 ${hasSourceImage ? '原图 + Prompt' : '待补原图'} 提交给 ${modelId} 做图片编辑${aspectRatio ? `，目标比例为 ${aspectRatio}` : ''}。`;
+  } else if (taskType === 'image_to_video') {
+    summary = hasPrimary
+      ? `当前会把第 1 张输入图提交给 ${modelId} 作为起始画面${caps.supportsImageToVideoReferenceImages ? `；参考图当前${imageSequence?.submittedReferenceCount || 0}张会随任务一起发送` : '；当前模型不提交参考图'}${caps.supportsImageToVideoEndFrame ? (endFrameReady ? '；尾帧也会一起提交。' : '；支持尾帧，但你还没设置。') : '。'}`
+      : `当前是 ${videoFamily} 图生视频，但还缺少第 1 张输入图。`;
+  } else {
+    summary = `当前会用 Prompt 驱动 ${modelId} 生成视频${caps.supportsTextToVideoReferenceImages ? '；参考图只作为主体或风格约束，不会当作首帧' : ''}${caps.supportsPromptOptimize ? '；提交前可先做模型提示词优化。' : '。'}`;
+  }
+  els.soraSubmitSummary.textContent = summary;
+
+  const tags = [{ text: `任务 ${taskLabel}` }];
+  if (taskType === 'text_to_video' || taskType === 'image_to_video') tags.push({ text: `视频家族 ${videoFamily}` });
+  if (caps.capabilitySourceLabel) tags.push({ text: `能力来源 ${caps.capabilitySourceLabel}` });
+  if (promptLength) tags.push({ text: `Prompt ${promptLength} 字` });
+  else if ((taskType === 'text_to_video' || taskType === 'text_to_image') && generationMode !== 'storyboard') tags.push({ text: '缺少 Prompt', warning: true });
+  else if (taskType === 'image_edit' || taskType === 'image_to_video') tags.push({ text: '建议补充 Prompt 约束动作或改图目标' });
+
+  if (taskType === 'image_to_video') {
+    tags.push({ text: hasPrimary ? '已设置第 1 张输入图' : '缺少第 1 张输入图', warning: !hasPrimary });
+    if (caps.supportsImageToVideoReferenceImages) {
+      tags.push({ text: `参考图提交 ${imageSequence?.submittedReferenceCount || 0} 张` });
+      tags.push({ text: `参考图${formatReferenceLimit(caps, { singular: '仅 1 张', pluralPrefix: '最多 ' })}` });
+    } else {
+      tags.push({ text: '参考图不会提交', warning: Boolean(sequenceSummary?.referenceCount) });
+    }
+    if (caps.supportsImageToVideoEndFrame) tags.push({ text: endFrameReady ? '尾帧会提交' : '支持尾帧但未设置' });
+    else tags.push({ text: '不支持尾帧' });
+    if (imageSequence?.droppedReferenceCount) tags.push({ text: `${imageSequence.droppedReferenceCount} 张参考图当前不会发送`, warning: true });
+  }
+
+  if (taskType === 'image_edit') {
+    tags.push({ text: hasSourceImage ? '已设置待编辑原图' : '缺少待编辑原图', warning: !hasSourceImage });
+  }
+
+  if (taskType === 'text_to_video') {
+    tags.push({ text: caps.supportsTextToVideoReferenceImages ? '参考图仅作约束' : '无参考图输入' });
+    if (caps.supportsTextToVideoReferenceImages) tags.push({ text: `参考图${formatReferenceLimit(caps, { singular: '仅 1 张', pluralPrefix: '最多 ' })}` });
+    if (caps.supportsPromptOptimize) tags.push({ text: '支持提示词优化' });
+  }
+
+  if (generationMode === 'storyboard') {
+    const shotCount = storyboardShotsFromEditor().length;
+    tags.push({ text: shotCount ? `分镜 ${shotCount} 个镜头` : '缺少分镜内容', warning: shotCount === 0 });
+  }
+  if (duration) tags.push({ text: `时长 ${duration}s` });
+  else if ((taskType === 'text_to_video' || taskType === 'image_to_video') && caps.durationOptions?.length) tags.push({ text: `可选时长 ${caps.durationOptions.join('/')}` });
+  if (aspectRatio) tags.push({ text: `比例 ${aspectRatio}` });
+
+  const uniqueTags = tags.filter((tag, index) => tags.findIndex((item) => `${item.text}|${Boolean(item.warning)}` === `${tag.text}|${Boolean(tag.warning)}`) === index);
+  els.soraSubmitTags.innerHTML = uniqueTags
+    .map((tag) => `<span class="sora-submit-tag${tag.warning ? ' sora-submit-tag-warning' : ''}">${escapeHtml(tag.text)}</span>`)
+    .join('');
+};
+
+updateImageToVideoPromptGuide = function updateImageToVideoPromptGuide() {
+  if (!els.imageToVideoPromptGuide || !els.imageToVideoPromptSummary) return;
+  const taskType = String(els.typeSelect?.value || '');
+  const visible = taskType === 'image_to_video';
+  showElement(els.imageToVideoPromptGuide, visible);
+  if (!visible) return;
+  ensureImageToVideoSequenceState();
+  const caps = getModelCapabilities(currentModel(), taskType);
+  const model = currentModel();
+  const family = getBridgeVideoModelFamilyLabel(model);
+  const submission = getImageSequenceSubmissionSummary(caps);
+  const promptLength = String(els.prompt?.value || '').trim().length;
+  const endFrameReady = Boolean(String(els.endFrameImageUrl?.value || '').trim() || String(els.endFrameAssetSelect?.value || '').trim());
+  const primaryLabel = submission.primaryReady ? '已设置第 1 张输入图' : '尚未设置第 1 张输入图';
+  const referenceLabel = caps.supportsImageToVideoReferenceImages
+    ? `参考图将提交 ${submission.submittedReferenceCount} 张，${formatReferenceLimit(caps, { singular: '仅 1 张', pluralPrefix: '最多 ' })}`
+    : `参考图不会提交${submission.totalReferenceCount ? `（当前有 ${submission.totalReferenceCount} 张）` : ''}`;
+  const endFrameLabel = caps.supportsImageToVideoEndFrame
+    ? (endFrameReady ? '尾帧会提交' : '支持尾帧但未设置')
+    : '当前模型不支持尾帧';
+  const promptLabel = promptLength ? `Prompt ${promptLength} 字` : (caps.supportsPromptOptimize ? '建议先写 Prompt 再做模型优化' : '建议补一段运动/镜头提示词');
+  els.imageToVideoPromptSummary.textContent = `${family} / ${caps.capabilitySourceLabel || '能力未标注'} / ${primaryLabel} / ${referenceLabel} / ${endFrameLabel} / ${promptLabel}`;
+};
+
+updateSoraWorkflowPanel = function updateSoraWorkflowPanel(taskType, caps, generationMode) {
+  if (!els.soraWorkflowPanel || !els.soraWorkflowSummary) return;
+  const model = currentModel();
+  const modelId = String(model?.id || '').trim() || '未选择模型';
+  const isVeoModel = isVeoFamilyModel(model);
+  const isSoraModel = isSoraFamilyModel(model);
+  const taskLabel = getTaskDisplayLabel(taskType);
+  const summaryBits = [
+    `任务 ${taskLabel}`,
+    `模型 ${modelId}`
+  ];
+  if ((taskType === 'text_to_video' || taskType === 'image_to_video') && caps.aspectRatioOptions?.length) {
+    summaryBits.push(`比例 ${caps.aspectRatioOptions.slice(0, 3).join('/')}`);
+  }
+  if ((taskType === 'text_to_video' || taskType === 'image_to_video') && caps.supportsDuration) {
+    summaryBits.push(caps.durationOptions?.length ? `时长 ${caps.durationOptions.join('/')}` : '可设时长');
+  } else if ((taskType === 'text_to_video' || taskType === 'image_to_video') && isVeoModel) {
+    summaryBits.push('不开放时长');
+  }
+  if (taskType === 'image_to_video' && caps.supportsImageToVideoEndFrame) summaryBits.push('支持首尾帧');
+  els.soraWorkflowSummary.textContent = summaryBits.join(' / ');
+
+  const storyboardButtons = Array.from(els.soraWorkflowPanel.querySelectorAll('[data-action="workflow-mode-storyboard"], [data-action="workflow-seed-storyboard"]'));
+  const optimizeButton = els.soraWorkflowPanel.querySelector('[data-action="workflow-optimize-prompt"]');
+  storyboardButtons.forEach((button) => {
+    const allow = taskType === 'text_to_video' && caps.supportsStoryboardPrompt;
+    button.classList.toggle('hidden', !allow && isVeoModel);
+    button.disabled = !allow && isVeoModel;
+  });
+  if (optimizeButton) {
+    const allowOptimize = (taskType === 'text_to_video' || taskType === 'image_to_video') && caps.supportsPromptOptimize;
+    optimizeButton.classList.toggle('hidden', !allowOptimize);
+    optimizeButton.disabled = !allowOptimize;
+  }
+
+  const cards = Array.from(els.soraWorkflowPanel.querySelectorAll('.sora-flow-card'));
+  const textVideoCard = cards.find((card) => card.querySelector('[data-action="workflow-mode-standard"]'));
+  const veoCard = cards.find((card) => card.querySelector('[data-action="workflow-optimize-prompt"]'));
+  const imageVideoCard = cards.find((card) => card.querySelector('[data-action="workflow-task-image-video"]'));
+  if (textVideoCard) {
+    const title = textVideoCard.querySelector('strong');
+    const copy = textVideoCard.querySelector('p');
+    if (isVeoModel) {
+      if (title) title.textContent = 'Veo 文生视频';
+      if (copy) copy.textContent = '先写 Prompt，再定比例和分辨率。';
+    } else if (isSoraModel) {
+      if (title) title.textContent = 'Sora 文生视频';
+      if (copy) copy.textContent = '先写 Prompt，再补时长和画幅。';
+    } else {
+      if (title) title.textContent = '文生视频';
+      if (copy) copy.textContent = '先写 Prompt，再补必要参数。';
+    }
+  }
+  if (veoCard) {
+    veoCard.classList.toggle('hidden', !isVeoModel);
+  }
+  if (imageVideoCard) {
+    const title = imageVideoCard.querySelector('strong');
+    const copy = imageVideoCard.querySelector('p');
+    if (isVeoModel) {
+      if (title) title.textContent = 'Veo 图生视频';
+      if (copy) copy.textContent = caps.supportsImageToVideoEndFrame
+        ? '第 1 张是首帧，可选尾帧。'
+        : '第 1 张是首帧，只显示可提交输入。';
+    } else if (isSoraModel) {
+      if (title) title.textContent = 'Sora 图生视频';
+      if (copy) copy.textContent = '第 1 张定起始画面，后续图做参考。';
+    }
+  }
+
+  Array.from(els.soraWorkflowPanel.querySelectorAll('[data-action]')).forEach((button) => {
+    const action = String(button.dataset.action || '');
+    const active = (
+      (action === 'workflow-task-text-image' && taskType === 'text_to_image')
+      || (action === 'workflow-task-image-edit' && taskType === 'image_edit')
+      || (action === 'workflow-task-text-video' && taskType === 'text_to_video')
+      || (action === 'workflow-task-image-video' && taskType === 'image_to_video')
+      || (action === 'workflow-mode-standard' && generationMode === 'standard')
+      || (action === 'workflow-mode-storyboard' && generationMode === 'storyboard')
+    );
+    button.dataset.flowActive = active ? 'true' : 'false';
+  });
+};
+
+renderFieldGuide = function renderFieldGuide(entries = []) {
+  if (!els.fieldGuidePanel) return;
+  const list = Array.isArray(entries) ? entries.slice(0, 4) : [];
+  if (!list.length) {
+    els.fieldGuidePanel.innerHTML = '';
+    return;
+  }
+  const cards = list.map((entry) => `
+    <article class="field-guide-card">
+      <div class="field-guide-head">
+        <div class="field-guide-title">${escapeHtml(entry.title)}</div>
+        <span class="field-guide-kind">${escapeHtml(entry.kind)}</span>
+      </div>
+      <div class="field-guide-copy">${escapeHtml(String(entry.purpose || '').split(/[。；]/)[0] || '')}</div>
+      <div class="field-guide-tip">${escapeHtml(String(entry.recommendation || '').split(/[。；]/)[0] || '')}</div>
+    </article>
+  `).join('');
+  const remain = entries.length > list.length ? '<div class="inline-hint">其余细节见模型卡。</div>' : '';
+  els.fieldGuidePanel.innerHTML = cards + remain;
+};
+
+updatePromptOptimizePanel = function updatePromptOptimizePanel(taskType, caps) {
+  if (!els.promptOptimizePanel || !els.optimizePromptWithModel || !els.promptOptimizeSummary || !els.promptOptimizeStatus) return;
+  const isVideoTask = taskType === 'text_to_video' || taskType === 'image_to_video';
+  const supportsOptimize = Boolean(isVideoTask && caps.supportsPromptOptimize);
+  showElement(els.promptOptimizePanel, supportsOptimize);
+  if (!supportsOptimize) {
+    els.promptOptimizeStatus.textContent = '';
+    showElement(els.promptOptimizeStatus, false);
+    return;
+  }
+  const modelId = String(currentModel()?.id || '').trim() || '当前模型';
+  els.promptOptimizeSummary.textContent = `${modelId} 可优化当前 Prompt。`;
+  els.optimizePromptWithModel.disabled = false;
+  els.optimizePromptWithModel.dataset.taskType = taskType;
+  els.optimizePromptWithModel.dataset.optimizePath = String(caps.promptOptimizePath || '').trim();
+};
+
+getVisualInputSemantics = function getVisualInputSemantics(taskType, caps, generationMode) {
+  const isImageToVideo = taskType === 'image_to_video';
+  const isImageEdit = taskType === 'image_edit';
+  const isTextToVideo = taskType === 'text_to_video';
+  const structuredMode = isTextToVideo && (generationMode === 'storyboard' || generationMode === 'intelligent');
+  const intelligentMode = isTextToVideo && generationMode === 'intelligent';
+  const storyboardMode = isTextToVideo && generationMode === 'storyboard';
+  const semantics = {
+    structuredMode,
+    hidesVisualInputs: structuredMode,
+    sourceLabel: '源图 URL',
+    sourceAssetLabel: '本地源图',
+    sourceUploadLabel: '上传源图',
+    sourcePlaceholder: '填图片 URL',
+    sourceHint: '',
+    referenceLabel: '参考图 URL',
+    referenceAssetLabel: '本地参考图',
+    referenceUploadLabel: '上传参考图',
+    referencePlaceholder: caps.supportsMultipleReferenceImages ? '一行一张 URL' : '填 1 张参考图 URL',
+    referenceHint: '',
+    endFrameLabel: '尾帧 URL',
+    endFrameAssetLabel: '本地尾帧',
+    endFrameUploadLabel: '上传尾帧',
+    endFramePlaceholder: '可选',
+    endFrameHint: '',
+    omniImagePlaceholder: '一行一个图片 URL',
+    omniVideoPlaceholder: '一行一个视频 URL',
+    elementPlaceholder: '一行一个元素描述',
+    omniHint: '',
+    visualGuide: ''
+  };
+  if (storyboardMode) {
+    semantics.visualGuide = '当前只提交分镜文本。';
+    return semantics;
+  }
+  if (intelligentMode) {
+    semantics.visualGuide = '当前只提交 Prompt 和分镜参数。';
+    return semantics;
+  }
+  if (isImageToVideo) {
+    semantics.sourceLabel = '首帧 / 输入图 URL';
+    semantics.sourceAssetLabel = '本地首帧 / 输入图';
+    semantics.sourceUploadLabel = '上传首帧 / 输入图';
+    semantics.sourcePlaceholder = '必填';
+    semantics.sourceHint = '第 1 张决定起始画面。';
+    semantics.referenceLabel = '附加参考图 URL';
+    semantics.referenceAssetLabel = '本地附加参考图';
+    semantics.referenceUploadLabel = '上传附加参考图';
+    semantics.referencePlaceholder = caps.supportsMultipleReferenceImages ? '一行一张 URL' : '可选 1 张';
+    semantics.referenceHint = caps.supportsImageToVideoReferenceImages ? `参考图只作约束，${formatReferenceLimit(caps, { singular: '仅 1 张', pluralPrefix: '最多 ' })}。` : '';
+    semantics.endFrameLabel = '尾帧 URL';
+    semantics.endFrameAssetLabel = '本地尾帧';
+    semantics.endFrameUploadLabel = '上传尾帧';
+    semantics.endFramePlaceholder = '可选';
+    semantics.endFrameHint = caps.supportsImageToVideoEndFrame ? '尾帧只控制结束画面。' : '';
+    semantics.visualGuide = caps.supportsImageToVideoEndFrame ? '首帧定开始，尾帧定结束。' : '首帧定开始。';
+    return semantics;
+  }
+  if (isImageEdit) {
+    semantics.sourceLabel = '待编辑原图 URL';
+    semantics.sourceAssetLabel = '本地原图';
+    semantics.sourceUploadLabel = '上传原图';
+    semantics.sourcePlaceholder = '必填';
+    semantics.sourceHint = '这张图会被直接编辑。';
+    semantics.referenceHint = caps.supportsReferenceImage ? '参考图只作方向参考。' : '';
+    semantics.visualGuide = caps.supportsReferenceImage ? '原图负责编辑，参考图负责方向。' : '只提交原图和 Prompt。';
+    return semantics;
+  }
+  if (taskType === 'text_to_image') {
+    semantics.referenceHint = caps.supportsTextToImageReferenceImages ? `参考图只作约束，${formatReferenceLimit(caps, { singular: '仅 1 张', pluralPrefix: '最多 ' })}。` : '';
+    semantics.visualGuide = caps.supportsReferenceImage ? '参考图不会直接输出。' : '';
+    return semantics;
+  }
+  if (isTextToVideo) {
+    semantics.referenceHint = caps.supportsTextToVideoReferenceImages ? `参考图只作约束，${formatReferenceLimit(caps, { singular: '仅 1 张', pluralPrefix: '最多 ' })}。` : '';
+    semantics.omniHint = caps.supportsOmniInputs ? 'Omni 输入独立于参考图。' : '';
+    semantics.visualGuide = caps.supportsTextToVideoReferenceImages ? '参考图不会当首帧。' : '';
+  }
+  return semantics;
+};
+
+function renderImageToVideoLocalWorkspace() {
+  if (!els.imageToVideoLocalWorkspace) return;
+  const sourceSelection = els.imageToVideoLocalWorkspace.querySelector('#workspaceSourceSelection');
+  const referenceSelection = els.imageToVideoLocalWorkspace.querySelector('#workspaceReferenceSelection');
+  if (!sourceSelection || !referenceSelection) return;
+  const taskType = String(els.typeSelect?.value || '');
+  if (taskType !== 'image_to_video') {
+    sourceSelection.innerHTML = '';
+    referenceSelection.innerHTML = '';
+    return;
+  }
+  const byId = new Map(state.assets.map((asset) => [asset.id, asset]));
+  const sourceId = String(state.imageToVideoSourceAssetId || els.sourceAssetSelect?.value || '').trim();
+  const referenceIds = state.imageToVideoReferenceAssetOrder.slice();
+  const renderCard = (assetId, role, index = 0, total = 0) => {
+    const asset = byId.get(assetId);
+    if (!asset) return '';
+    const src = `/api/v1/assets/${asset.id}/content`;
+    const isReference = role === 'reference';
+    const orderLabel = isReference ? `第 ${index + 2} 张输入图` : '第 1 张输入图';
+    const moveUpDisabled = isReference && index === 0 ? 'disabled' : '';
+    const moveDownDisabled = isReference && index === total - 1 ? 'disabled' : '';
+    return `
+      <article class="local-image-card${isReference ? ' local-image-card-draggable' : ' local-image-card-primary'}" ${isReference ? `draggable="true" data-reference-id="${escapeAttr(asset.id)}"` : ''}>
+        <img src="${escapeAttr(src)}" alt="${escapeAttr(asset.originalName || asset.id)}" loading="lazy" />
+        <div class="local-image-card-meta">
+          <span class="local-image-order">${escapeHtml(orderLabel)}</span>
+          <strong>${escapeHtml(asset.originalName || asset.id)}</strong>
+          <span>${escapeHtml(asset.id)}</span>
+        </div>
+        <div class="local-image-actions">
+          ${role === 'reference' ? `<button type="button" class="secondary-button" data-action="workspace-promote-reference" data-id="${escapeAttr(asset.id)}">设为第 1 张</button>` : ''}
+          ${role === 'reference' ? `<button type="button" class="secondary-button" data-action="workspace-move-reference-up" data-id="${escapeAttr(asset.id)}" ${moveUpDisabled}>前移</button>` : ''}
+          ${role === 'reference' ? `<button type="button" class="secondary-button" data-action="workspace-move-reference-down" data-id="${escapeAttr(asset.id)}" ${moveDownDisabled}>后移</button>` : ''}
+          <button type="button" class="secondary-button" data-action="workspace-remove-${role}" data-id="${escapeAttr(asset.id)}">移除</button>
+        </div>
+      </article>`;
+  };
+  sourceSelection.innerHTML = sourceId
+    ? renderCard(sourceId, 'source', 0, 1)
+    : '<div class="local-image-empty">还没有本地主图。点“上传主图”后会自动放进这里。</div>';
+  referenceSelection.innerHTML = referenceIds.length
+    ? referenceIds.map((assetId, index) => renderCard(assetId, 'reference', index, referenceIds.length)).join('')
+    : '<div class="local-image-empty">还没有本地附加参考图。点“上传附加图”，或在素材库点“设为参考图”。</div>';
+}
+
+function renderImageToVideoUrlWorkspace() {
+  if (!els.imageToVideoUrlWorkspace) return;
+  const sourceSelection = els.imageToVideoUrlWorkspace.querySelector('#workspaceSourceUrlSelection');
+  const referenceSelection = els.imageToVideoUrlWorkspace.querySelector('#workspaceReferenceUrlSelection');
+  if (!sourceSelection || !referenceSelection) return;
+  const taskType = String(els.typeSelect?.value || '');
+  if (taskType !== 'image_to_video') {
+    sourceSelection.innerHTML = '';
+    referenceSelection.innerHTML = '';
+    return;
+  }
+  const sourceUrl = String(state.imageToVideoSourceUrlValue || els.sourceImageUrl?.value || '').trim();
+  const referenceUrls = state.imageToVideoReferenceUrlOrder.slice();
+  const renderUrlCard = (url, role, index = 0, total = 0) => {
+    const isReference = role === 'reference';
+    const orderLabel = isReference ? `第 ${index + 2} 张输入图` : '第 1 张输入图';
+    const moveUpDisabled = isReference && index === 0 ? 'disabled' : '';
+    const moveDownDisabled = isReference && index === total - 1 ? 'disabled' : '';
+    return `
+      <article class="local-image-card${isReference ? ' local-image-card-draggable' : ' local-image-card-primary'}" ${isReference ? `draggable="true" data-reference-url="${escapeAttr(url)}"` : ''}>
+        <img src="${escapeAttr(url)}" alt="${escapeAttr(url)}" loading="lazy" />
+        <div class="local-image-card-meta">
+          <span class="local-image-order">${escapeHtml(orderLabel)}</span>
+          <strong>${escapeHtml(url)}</strong>
+          <code>${escapeHtml(url)}</code>
+        </div>
+        <div class="local-image-actions">
+          ${role === 'reference' ? `<button type="button" class="secondary-button" data-action="workspace-promote-reference-url" data-url="${escapeAttr(url)}">设为第 1 张</button>` : ''}
+          ${role === 'reference' ? `<button type="button" class="secondary-button" data-action="workspace-move-reference-url-up" data-url="${escapeAttr(url)}" ${moveUpDisabled}>前移</button>` : ''}
+          ${role === 'reference' ? `<button type="button" class="secondary-button" data-action="workspace-move-reference-url-down" data-url="${escapeAttr(url)}" ${moveDownDisabled}>后移</button>` : ''}
+          <button type="button" class="secondary-button" data-action="workspace-remove-${role}-url" data-url="${escapeAttr(url)}">移除</button>
+        </div>
+      </article>`;
+  };
+  sourceSelection.innerHTML = sourceUrl
+    ? renderUrlCard(sourceUrl, 'source', 0, 1)
+    : '<div class="local-image-empty">还没有主图 URL。点“设置主图 URL”即可写入第 1 张输入图。</div>';
+  referenceSelection.innerHTML = referenceUrls.length
+    ? referenceUrls.map((url, index) => renderUrlCard(url, 'reference', index, referenceUrls.length)).join('')
+    : '<div class="local-image-empty">还没有附加参考图 URL。点“添加附加图 URL”后，这里会按顺序列出。</div>';
+}
+
+function renderImageToVideoSequenceWorkspace() {
+  if (!els.imageToVideoSequenceWorkspace) return;
+  const list = els.imageToVideoSequenceWorkspace.querySelector('#imageToVideoSequenceList');
+  if (!list) return;
+  const taskType = String(els.typeSelect?.value || '');
+  if (taskType !== 'image_to_video') {
+    list.innerHTML = '';
+    return;
+  }
+  ensureImageToVideoSequenceState();
+  const caps = getModelCapabilities(currentModel(), taskType);
+  const allowsReferenceInputs = supportsImageToVideoReferenceInputs(caps);
+  const { sequence } = getImageToVideoInputSequenceSummary();
+  const assetById = new Map(state.assets.map((asset) => [asset.id, asset]));
+  const uploadReferenceButton = els.imageToVideoSequenceWorkspace.querySelector('[data-action="sequence-upload-reference"]');
+  const addUrlButton = els.imageToVideoSequenceWorkspace.querySelector('[data-action="sequence-add-url"]');
+  if (uploadReferenceButton) {
+    uploadReferenceButton.hidden = !allowsReferenceInputs;
+    uploadReferenceButton.disabled = !allowsReferenceInputs;
+    uploadReferenceButton.title = allowsReferenceInputs ? '' : '当前模型不支持附加参考图';
+  }
+  if (addUrlButton) {
+    addUrlButton.textContent = allowsReferenceInputs ? '加入图片 URL' : '设置第 1 张 URL';
+    addUrlButton.title = allowsReferenceInputs ? '' : '当前模型只会提交第 1 张输入图';
+  }
+  if (!sequence.length) {
+    list.innerHTML = '<div class="local-image-empty">先上传第 1 张，或直接加入图片 URL。后续图片会按照你排好的顺序一起提交。</div>';
+    return;
+  }
+  list.innerHTML = sequence.map((item, index) => {
+    const key = sequenceKeyForImageToVideoItem(item);
+    const isPrimary = index === 0;
+    const orderLabel = `第 ${index + 1} 张输入图`;
+    const metaLabel = item.kind === 'asset' ? '本地素材' : '图片 URL';
+    const moveUpDisabled = index === 0 ? 'disabled' : '';
+    const moveDownDisabled = index === sequence.length - 1 ? 'disabled' : '';
+    const asset = item.kind === 'asset' ? assetById.get(item.value) : null;
+    const previewSrc = item.kind === 'asset' ? `/api/v1/assets/${item.value}/content` : item.value;
+    const title = item.kind === 'asset'
+      ? String(asset?.originalName || item.value)
+      : item.value;
+    const subtitle = item.kind === 'asset' ? item.value : item.value;
+    return `
+      <article class="image-sequence-card${isPrimary ? ' image-sequence-card-primary' : ''}${index > 0 ? ' image-sequence-card-draggable' : ''}" ${index > 0 ? `draggable="true" data-sequence-key="${escapeAttr(key)}"` : ''}>
+        <img src="${escapeAttr(previewSrc)}" alt="${escapeAttr(title)}" loading="lazy" />
+        <div class="image-sequence-meta">
+          <div class="image-sequence-badges">
+            <span class="local-image-order">${escapeHtml(orderLabel)}</span>
+            <span class="image-sequence-source">${escapeHtml(metaLabel)}</span>
+          </div>
+          <strong>${escapeHtml(title)}</strong>
+          <span>${escapeHtml(subtitle)}</span>
+        </div>
+        <div class="local-image-actions">
+          ${!isPrimary ? `<button type="button" class="secondary-button" data-action="sequence-promote" data-sequence-key="${escapeAttr(key)}">设为第 1 张</button>` : ''}
+          ${item.kind === 'url' ? `<button type="button" class="secondary-button" data-action="sequence-edit-url" data-sequence-key="${escapeAttr(key)}">编辑 URL</button>` : ''}
+          <button type="button" class="secondary-button" data-action="sequence-move-up" data-sequence-key="${escapeAttr(key)}" ${moveUpDisabled}>前移</button>
+          <button type="button" class="secondary-button" data-action="sequence-move-down" data-sequence-key="${escapeAttr(key)}" ${moveDownDisabled}>后移</button>
+          <button type="button" class="secondary-button" data-action="sequence-remove" data-sequence-key="${escapeAttr(key)}">移除</button>
+        </div>
+      </article>`;
+  }).join('');
+}
+
+function countDelimitedUrls(value) {
+  return String(value || '')
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .length;
+}
+
+function normalizeImageToVideoSequenceItem(item) {
+  const kind = String(item?.kind || '').trim();
+  const value = String(item?.value || '').trim();
+  if (!value || (kind !== 'asset' && kind !== 'url')) return null;
+  return { kind, value };
+}
+
+function sequenceKeyForImageToVideoItem(item) {
+  const normalized = normalizeImageToVideoSequenceItem(item);
+  if (!normalized) return '';
+  return `${normalized.kind}:${normalized.value}`;
+}
+
+function getImageToVideoInputSequence() {
+  const normalized = Array.isArray(state.imageToVideoInputSequence)
+    ? state.imageToVideoInputSequence.map((item) => normalizeImageToVideoSequenceItem(item)).filter(Boolean)
+    : [];
+  state.imageToVideoInputSequence = normalized;
+  return normalized.slice();
+}
+
+function buildImageToVideoInputSequenceFromLegacyState() {
+  const next = [];
+  const pushUnique = (item) => {
+    const normalized = normalizeImageToVideoSequenceItem(item);
+    if (!normalized) return;
+    const key = sequenceKeyForImageToVideoItem(normalized);
+    if (!key || next.some((entry) => sequenceKeyForImageToVideoItem(entry) === key)) return;
+    next.push(normalized);
+  };
+  pushUnique({ kind: 'asset', value: String(state.imageToVideoSourceAssetId || els.sourceAssetSelect?.value || '').trim() });
+  pushUnique({ kind: 'url', value: String(state.imageToVideoSourceUrlValue || els.sourceImageUrl?.value || '').trim() });
+  state.imageToVideoReferenceAssetOrder.forEach((id) => pushUnique({ kind: 'asset', value: id }));
+  state.imageToVideoReferenceUrlOrder.forEach((url) => pushUnique({ kind: 'url', value: url }));
+  return next;
+}
+
+function applyImageToVideoSequenceToLegacyState() {
+  const sequence = getImageToVideoInputSequence();
+  const primary = sequence[0] || null;
+  const references = sequence.slice(1);
+  state.imageToVideoSourceAssetId = primary?.kind === 'asset' ? primary.value : '';
+  state.imageToVideoSourceUrlValue = primary?.kind === 'url' ? primary.value : '';
+  state.imageToVideoReferenceAssetOrder = references.filter((item) => item.kind === 'asset').map((item) => item.value);
+  state.imageToVideoReferenceUrlOrder = references.filter((item) => item.kind === 'url').map((item) => item.value);
+  applyImageToVideoAssetStateToForm();
+  applyImageToVideoUrlStateToForm();
+}
+
+function ensureImageToVideoSequenceState() {
+  if (!getImageToVideoInputSequence().length) {
+    state.imageToVideoInputSequence = buildImageToVideoInputSequenceFromLegacyState();
+  }
+  applyImageToVideoSequenceToLegacyState();
+}
+
+function setImageToVideoInputSequence(next) {
+  const normalized = Array.isArray(next)
+    ? next.map((item) => normalizeImageToVideoSequenceItem(item)).filter(Boolean)
+    : [];
+  const seen = new Set();
+  state.imageToVideoInputSequence = normalized.filter((item) => {
+    const key = sequenceKeyForImageToVideoItem(item);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  applyImageToVideoSequenceToLegacyState();
+}
+
+function appendImageToVideoInputSequence(items, mode = 'append') {
+  const normalizedItems = Array.isArray(items)
+    ? items.map((item) => normalizeImageToVideoSequenceItem(item)).filter(Boolean)
+    : [];
+  if (!normalizedItems.length) return;
+  const next = getImageToVideoInputSequence();
+  const existingKeys = new Set(next.map((item) => sequenceKeyForImageToVideoItem(item)));
+  const uniqueItems = normalizedItems.filter((item) => {
+    const key = sequenceKeyForImageToVideoItem(item);
+    if (!key || existingKeys.has(key)) return false;
+    existingKeys.add(key);
+    return true;
+  });
+  if (!uniqueItems.length) return;
+  if (mode === 'replace-primary') {
+    const previousPrimary = next[0] || null;
+    const rest = next.slice(1).filter((item) => sequenceKeyForImageToVideoItem(item) !== sequenceKeyForImageToVideoItem(uniqueItems[0]));
+    const merged = [uniqueItems[0]];
+    if (previousPrimary && sequenceKeyForImageToVideoItem(previousPrimary) !== sequenceKeyForImageToVideoItem(uniqueItems[0])) {
+      merged.push(previousPrimary);
+    }
+    setImageToVideoInputSequence(merged.concat(rest).concat(uniqueItems.slice(1)));
+    return;
+  }
+  setImageToVideoInputSequence(next.concat(uniqueItems));
+}
+
+function moveImageToVideoInputSequenceItemBefore(dragKey, targetKey) {
+  if (!dragKey || !targetKey || dragKey === targetKey) return;
+  const next = getImageToVideoInputSequence();
+  const dragged = next.find((item) => sequenceKeyForImageToVideoItem(item) === dragKey);
+  if (!dragged) return;
+  const filtered = next.filter((item) => sequenceKeyForImageToVideoItem(item) !== dragKey);
+  const targetIndex = filtered.findIndex((item) => sequenceKeyForImageToVideoItem(item) === targetKey);
+  if (targetIndex < 0) return;
+  filtered.splice(targetIndex, 0, dragged);
+  setImageToVideoInputSequence(filtered);
+}
+
+function updateImageToVideoInputSequenceItem(action, key) {
+  const next = getImageToVideoInputSequence();
+  const index = next.findIndex((item) => sequenceKeyForImageToVideoItem(item) === key);
+  if (index < 0) return;
+  if (action === 'remove') {
+    next.splice(index, 1);
+  } else if (action === 'promote' && index > 0) {
+    const [item] = next.splice(index, 1);
+    next.unshift(item);
+  } else if (action === 'move-up' && index > 0) {
+    [next[index - 1], next[index]] = [next[index], next[index - 1]];
+  } else if (action === 'move-down' && index < next.length - 1) {
+    [next[index + 1], next[index]] = [next[index], next[index + 1]];
+  } else if (action === 'edit-url' && next[index].kind === 'url') {
+    const edited = window.prompt('更新图片 URL', next[index].value);
+    if (edited == null) return;
+    const value = String(edited || '').trim();
+    if (!value) {
+      next.splice(index, 1);
+    } else {
+      next[index] = { kind: 'url', value };
+    }
+  }
+  setImageToVideoInputSequence(next);
+}
+
+function getImageToVideoInputSequenceSummary() {
+  const sequence = getImageToVideoInputSequence();
+  const primary = sequence[0] || null;
+  const referenceItems = sequence.slice(1);
+  return {
+    sequence,
+    primary,
+    referenceItems,
+    primaryCount: primary ? 1 : 0,
+    referenceCount: referenceItems.length,
+    assetReferenceCount: referenceItems.filter((item) => item.kind === 'asset').length,
+    urlReferenceCount: referenceItems.filter((item) => item.kind === 'url').length
+  };
+}
+
+function syncImageToVideoAssetStateFromForm() {
+  state.imageToVideoSourceAssetId = String(els.sourceAssetSelect?.value || '').trim();
+  const selectedReferenceIds = Array.from(els.referenceAssetSelect?.options || [])
+    .filter((option) => option.selected && option.value)
+    .map((option) => option.value);
+  const ordered = state.imageToVideoReferenceAssetOrder.filter((id) => selectedReferenceIds.includes(id));
+  const missing = selectedReferenceIds.filter((id) => !ordered.includes(id));
+  state.imageToVideoReferenceAssetOrder = ordered.concat(missing);
+  if (String(els.typeSelect?.value || '') === 'image_to_video') {
+    state.imageToVideoInputSequence = buildImageToVideoInputSequenceFromLegacyState();
+  }
+}
+
+function applyImageToVideoAssetStateToForm() {
+  if (els.sourceAssetSelect) {
+    els.sourceAssetSelect.value = String(state.imageToVideoSourceAssetId || '').trim();
+  }
+  const selectedIds = new Set(state.imageToVideoReferenceAssetOrder);
+  Array.from(els.referenceAssetSelect?.options || []).forEach((option) => {
+    option.selected = selectedIds.has(option.value);
+  });
+}
+
+function appendImageToVideoReferenceAssets(ids) {
+  const next = state.imageToVideoReferenceAssetOrder.slice();
+  ids.forEach((id) => {
+    const normalized = String(id || '').trim();
+    if (normalized && !next.includes(normalized)) next.push(normalized);
+  });
+  state.imageToVideoReferenceAssetOrder = next;
+  applyImageToVideoAssetStateToForm();
+}
+
+function moveImageToVideoReferenceAssetBefore(dragId, targetId) {
+  if (!dragId || !targetId || dragId === targetId) return;
+  const next = state.imageToVideoReferenceAssetOrder.filter((id) => id !== dragId);
+  const targetIndex = next.indexOf(targetId);
+  if (targetIndex < 0) return;
+  next.splice(targetIndex, 0, dragId);
+  state.imageToVideoReferenceAssetOrder = next;
+  applyImageToVideoAssetStateToForm();
+}
+
+function syncImageToVideoUrlStateFromForm() {
+  state.imageToVideoSourceUrlValue = String(els.sourceImageUrl?.value || '').trim();
+  const rawUrls = String(els.referenceImageUrl?.value || '')
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const ordered = state.imageToVideoReferenceUrlOrder.filter((url) => rawUrls.includes(url));
+  const missing = rawUrls.filter((url) => !ordered.includes(url));
+  state.imageToVideoReferenceUrlOrder = ordered.concat(missing);
+  if (String(els.typeSelect?.value || '') === 'image_to_video') {
+    state.imageToVideoInputSequence = buildImageToVideoInputSequenceFromLegacyState();
+  }
+}
+
+function applyImageToVideoUrlStateToForm() {
+  if (els.sourceImageUrl) els.sourceImageUrl.value = String(state.imageToVideoSourceUrlValue || '').trim();
+  if (els.referenceImageUrl) els.referenceImageUrl.value = state.imageToVideoReferenceUrlOrder.join('\n');
+}
+
+function appendImageToVideoReferenceUrls(urls) {
+  const next = state.imageToVideoReferenceUrlOrder.slice();
+  urls.forEach((url) => {
+    const normalized = String(url || '').trim();
+    if (normalized && !next.includes(normalized)) next.push(normalized);
+  });
+  state.imageToVideoReferenceUrlOrder = next;
+  applyImageToVideoUrlStateToForm();
+}
+
+function moveImageToVideoReferenceUrlBefore(dragUrl, targetUrl) {
+  if (!dragUrl || !targetUrl || dragUrl === targetUrl) return;
+  const next = state.imageToVideoReferenceUrlOrder.filter((url) => url !== dragUrl);
+  const targetIndex = next.indexOf(targetUrl);
+  if (targetIndex < 0) return;
+  next.splice(targetIndex, 0, dragUrl);
+  state.imageToVideoReferenceUrlOrder = next;
+  applyImageToVideoUrlStateToForm();
+}
+
+function updateImageToVideoInputSummary(caps) {
+  if (!els.imageToVideoInputSummary) return;
+  ensureImageToVideoSequenceState();
+  const summary = getImageToVideoInputSequenceSummary();
+  const primaryCount = summary.primaryCount;
+  const referenceCount = summary.referenceCount;
+  const maxLabel = caps.supportsMultipleReferenceImages
+    ? `最多 ${caps.maxReferenceImages || 'N'} 张附加图`
+    : '仅 1 张附加图';
+  els.imageToVideoInputSummary.textContent = `当前主图 ${primaryCount} 张，附加图 ${referenceCount} 张，${maxLabel}`;
+  const allowsReferenceInputs = supportsImageToVideoReferenceInputs(caps);
+  if (allowsReferenceInputs) {
+    const maxLabel = caps.supportsMultipleReferenceImages ? `最多 ${caps.maxReferenceImages || 'N'} 张附加图` : '仅 1 张附加图';
+    els.imageToVideoInputSummary.textContent = `当前主图 ${primaryCount} 张，附加图 ${referenceCount} 张，${maxLabel}`;
+  } else {
+    const referenceNote = referenceCount ? '，附加图当前不会提交' : '';
+    els.imageToVideoInputSummary.textContent = `当前主图 ${primaryCount} 张，附加图 ${referenceCount} 张，当前模型仅提交第 1 张输入图${referenceNote}`;
+  }
+  const updateBadge = (labelEl, text) => {
+    const badge = labelEl?.querySelector('.visual-input-badge');
+    if (badge) badge.textContent = text;
+  };
+  updateBadge(els.sourceImageWrap, '主图 / 首帧');
+  updateBadge(els.sourceAssetWrap, '主图 / 首帧');
+  updateBadge(els.sourceUploadWrap, '主图 / 首帧');
+  updateBadge(els.referenceImageWrap, caps.supportsMultipleReferenceImages ? '附加参考图' : '参考图');
+  updateBadge(els.referenceAssetWrap, caps.supportsMultipleReferenceImages ? '附加参考图' : '参考图');
+  updateBadge(els.referenceUploadWrap, caps.supportsMultipleReferenceImages ? '附加参考图' : '参考图');
+  if (els.referenceAssetHelp) {
+    els.referenceAssetHelp.textContent = caps.supportsMultipleReferenceImages
+      ? '本地附加参考图：可在下拉框多选；也可以先点“上传参考图”，上传后会自动选中。'
+      : '本地参考图：在下拉框选择 1 张；也可以先点“上传参考图”，上传后会自动选中。';
+  }
+  if (els.referenceUploadHelp) {
+    els.referenceUploadHelp.textContent = caps.supportsMultipleReferenceImages
+      ? '上传附加参考图：可一次选择多张。上传后会自动写入“本地附加参考图”。'
+      : '上传参考图：选择 1 张。上传后会自动写入“本地参考图”。';
+  }
+}
+
+function refreshImageToVideoInputSummaryFromCurrentSelection() {
+  const taskType = String(els.typeSelect?.value || '');
+  if (taskType !== 'image_to_video') return;
+  const model = currentModel();
+  const caps = getModelCapabilities(model, taskType);
+  updateImageToVideoInputSummary(caps);
+  updateImageToVideoPromptGuide();
+  renderImageToVideoSequenceWorkspace();
+  renderImageToVideoLocalWorkspace();
+  renderImageToVideoUrlWorkspace();
+}
+
+function getCapabilitySchemaEntry(taskType, modelId) {
+  const models = state.capabilitySchema?.models;
+  if (!models || !modelId) return null;
+  return models[modelId]?.capabilities?.[taskType] || null;
+}
+
+function getSchemaVisibleFieldMap(taskType, modelId) {
+  const schemaEntry = getCapabilitySchemaEntry(taskType, modelId);
+  const visibleFields = Array.isArray(schemaEntry?.fields)
+    ? schemaEntry.fields.filter((field) => field?.visible !== false && field?.name)
+    : [];
+  return new Map(visibleFields.map((field) => [String(field.name), field]));
+}
+
+function schemaAllowsAnyField(taskType, modelId, names = []) {
+  const fieldMap = getSchemaVisibleFieldMap(taskType, modelId);
+  if (!fieldMap.size) return true;
+  return names.some((name) => fieldMap.has(String(name)));
+}
+
+function renderCapabilityFieldList(target, fields = [], titleMap = new Map()) {
+  if (!target) return;
+  if (!fields.length) {
+    target.innerHTML = '<div class="capability-empty">当前模型没有这一层的可提交字段。</div>';
+    return;
+  }
+  target.innerHTML = fields.map((field) => {
+    const label = String(field?.label || field?.name || '').trim();
+    const type = String(field?.type || '').trim();
+    const required = field?.required ? '<span class="capability-chip capability-chip-required">必填</span>' : '';
+    const liveTitle = titleMap.get(String(field?.name || '').trim()) || '';
+    const constraintBits = [];
+    if (Array.isArray(field?.options) && field.options.length) constraintBits.push(`${field.options.length} 个选项`);
+    if (field?.maxItems) constraintBits.push(`最多 ${field.maxItems} 项`);
+    if (field?.maxLength) constraintBits.push(`最多 ${field.maxLength} 字`);
+    if (field?.min != null || field?.max != null) {
+      constraintBits.push(`范围 ${field.min ?? '-'} ~ ${field.max ?? '-'}`);
+    }
+    return `
+      <article class="capability-field-card">
+        <div class="capability-field-top">
+          <strong>${escapeHtml(label)}</strong>
+          <div class="capability-chip-row">
+            <span class="capability-chip">${escapeHtml(type || 'field')}</span>
+            ${required}
+          </div>
+        </div>
+        <div class="capability-field-copy">${escapeHtml(liveTitle || '当前模型能力 schema 暴露的输入项')}</div>
+        ${constraintBits.length ? `<div class="capability-field-meta">${escapeHtml(constraintBits.join(' / '))}</div>` : ''}
+      </article>`;
+  }).join('');
+}
+
+function renderCapabilityFieldLayout(taskType, model, caps, generationMode) {
+  if (!els.capabilityFieldLayout) return;
+  const schemaEntry = getCapabilitySchemaEntry(taskType, String(model?.id || ''));
+  if (!schemaEntry?.fields?.length) {
+    els.capabilityFieldLayout.classList.add('hidden');
+    return;
+  }
+  els.capabilityFieldLayout.classList.remove('hidden');
+  const fields = schemaEntry.fields.filter((field) => field?.visible !== false);
+  const titleMap = new Map();
+  titleMap.set('prompt', taskType === 'image_to_video' ? '可选的镜头、运动和节奏描述，用于补充输入图序列。' : '当前创作入口的核心文本输入。');
+  titleMap.set('videoGenerationMode', generationMode === 'storyboard' ? '当前已切到故事板模式。' : '当前会决定标准模式、故事板还是智能分镜。');
+  titleMap.set('storyboardText', '用于组织多镜头文本结构，只在故事板相关能力里生效。');
+  titleMap.set('sourceImage', taskType === 'image_to_video' ? '现在由“输入图序列”统一承载第 1 张输入图。' : '可通过 URL、本地素材或上传提供。');
+  titleMap.set('referenceImages', taskType === 'image_to_video' ? '现在由“输入图序列”承载第 2-N 张参考图。' : '用于约束主体、风格或画面方向。');
+  titleMap.set('endFrameImage', '用于约束结尾画面，只在支持尾帧的模型里显示。');
+  titleMap.set('duration', '会根据模型支持情况限制为固定档位或允许区间。');
+  titleMap.set('aspectRatio', '画幅比例会与尺寸和分辨率一起影响最终结果。');
+  titleMap.set('imageSize', '优先使用模型公开的尺寸档位，而不是盲填自由值。');
+  titleMap.set('resolution', '当前模型若允许，会暴露分辨率档位或自定义分辨率。');
+  titleMap.set('negativePrompt', '仅在模型支持时生效，用于排除不希望出现的内容。');
+  titleMap.set('providerMode', '这是模型或 Provider 暴露的原生档位，不是任意自由输入。');
+  titleMap.set('cfgScale', '高阶控制项，建议明确知道效果差异后再改。');
+  titleMap.set('cameraControl', '镜头控制只在明确支持显式镜头参数时开放。');
+  titleMap.set('omniInputs', '用于 Omni / Elements 这类特定能力，不等于普通参考图。');
+  titleMap.set('seed', '用于结果复现和稳定对比。');
+  titleMap.set('styleStrength', '用于参考强度或风格强度调节。');
+  titleMap.set('imageCount', '只在图片类任务支持多图输出时开放。');
+  titleMap.set('imageQuality', '由模型暴露的质量档位决定，不做猜测。');
+
+  renderCapabilityFieldList(els.capabilityBasicFields, fields.filter((field) => field.category === 'basic'), titleMap);
+  renderCapabilityFieldList(els.capabilityAdvancedFields, fields.filter((field) => field.category === 'advanced'), titleMap);
+  renderCapabilityFieldList(els.capabilityExpertFields, fields.filter((field) => field.category === 'expert'), titleMap);
+}
+
+function updateImageToVideoPromptGuide() {
+  if (!els.imageToVideoPromptGuide || !els.imageToVideoPromptSummary) return;
+  const taskType = String(els.typeSelect?.value || '');
+  const visible = taskType === 'image_to_video';
+  showElement(els.imageToVideoPromptGuide, visible);
+  if (!visible) return;
+  ensureImageToVideoSequenceState();
+  const { primary, referenceItems } = getImageToVideoInputSequenceSummary();
+  const promptLength = String(els.prompt?.value || '').trim().length;
+  const primaryLabel = primary ? '已设置第 1 张输入图' : '尚未设置第 1 张输入图';
+  const referenceLabel = `附加图 ${referenceItems.length} 张`;
+  const promptLabel = promptLength ? `Prompt ${promptLength} 字` : '建议补一段运动/镜头提示词';
+  els.imageToVideoPromptSummary.textContent = `${primaryLabel} / ${referenceLabel} / ${promptLabel}`;
+}
+
+function updatePromptOptimizePanel(taskType, caps) {
+  if (!els.promptOptimizePanel || !els.optimizePromptWithModel || !els.promptOptimizeSummary || !els.promptOptimizeStatus) return;
+  const isVideoTask = taskType === 'text_to_video' || taskType === 'image_to_video';
+  const supportsOptimize = Boolean(isVideoTask && caps.supportsPromptOptimize);
+  showElement(els.promptOptimizePanel, supportsOptimize);
+  if (!supportsOptimize) {
+    els.promptOptimizeStatus.textContent = '';
+    showElement(els.promptOptimizeStatus, false);
+    return;
+  }
+  const model = currentModel();
+  const modelId = String(model?.id || '').trim() || '当前模型';
+  els.promptOptimizeSummary.textContent = `${modelId} 可尝试模型侧提示词优化，适合先把动作、镜头和节奏整理清楚再提交。`;
+  els.optimizePromptWithModel.disabled = false;
+  els.optimizePromptWithModel.dataset.taskType = taskType;
+  els.optimizePromptWithModel.dataset.optimizePath = String(caps.promptOptimizePath || '').trim();
+}
+
+function getCreateFormBlockRefs() {
+  const modelRow = els.imageModelWrap?.closest('.inline-grid') || null;
+  const sizeRow = els.aspectRatioWrap?.closest('.inline-grid') || null;
+  const resolutionRow = els.durationWrap?.closest('.inline-grid') || null;
+  const urlRow = els.sourceImageWrap?.closest('.inline-grid') || null;
+  const assetRow = els.sourceAssetWrap?.closest('.inline-grid') || null;
+  const uploadRow = els.sourceUploadWrap?.closest('.inline-grid') || null;
+  const seedRow = els.createForm?.querySelector('label[for="seed"]')?.closest('.inline-grid') || null;
+  return {
+    typeField: els.typeSelect?.closest('label') || null,
+    promptField: els.prompt?.closest('label') || null,
+    negativePromptField: els.negativePrompt?.closest('label') || null,
+    providerModeWrap: els.providerModeWrap || null,
+    cfgScaleWrap: els.cfgScaleWrap || null,
+    modelRow,
+    imageOptionRow: els.imageOptionRow || null,
+    sizeRow,
+    resolutionRow,
+    urlRow,
+    assetRow,
+    uploadRow,
+    storyboardPanel: els.storyboardPanel || null,
+    imageToVideoInputPanel: els.imageToVideoInputPanel || null,
+    imageToVideoSequenceWorkspace: els.imageToVideoSequenceWorkspace || null,
+    visualInputGuide: els.visualInputGuide || null,
+    sourceImageHint: els.sourceImageHint || null,
+    referenceImageHint: els.referenceImageHint || null,
+    endFrameGroup: els.endFrameGroup || null,
+    endFrameUploadWrap: els.endFrameUploadWrap || null,
+    endFrameHint: els.endFrameHint || null,
+    videoAdvancedRow: els.videoAdvancedRow || null,
+    cameraControlGroup: els.cameraControlGroup || null,
+    omniInputsGroup: els.omniInputsGroup || null,
+    omniInputHint: els.omniInputHint || null,
+    seedRow
+  };
+}
+
+function ensureCapabilityDrivenFormSections() {
+  if (!els.createForm) return null;
+  let layout = document.getElementById('capabilityFormSections');
+  if (!layout) {
+    layout = document.createElement('section');
+    layout.id = 'capabilityFormSections';
+    layout.className = 'capability-form-sections';
+    layout.innerHTML = `
+      <section class="capability-form-section" data-section="basic">
+        <div class="capability-form-section-head">
+          <strong>基础输入</strong>
+          <span>当前任务最先需要完成的输入。</span>
+        </div>
+        <div class="capability-form-section-body"></div>
+      </section>
+      <details class="capability-form-section" data-section="advanced">
+        <summary class="capability-form-section-head">
+          <strong>高级输入</strong>
+          <span>只在需要更精细控制时展开。</span>
+        </summary>
+        <div class="capability-form-section-body"></div>
+      </details>
+      <details class="capability-form-section" data-section="expert">
+        <summary class="capability-form-section-head">
+          <strong>专家输入</strong>
+          <span>用于复现、调参与对比测试。</span>
+        </summary>
+        <div class="capability-form-section-body"></div>
+      </details>`;
+    const submitButton = els.createForm.querySelector('.submit-button');
+    if (submitButton?.parentElement) {
+      els.createForm.insertBefore(layout, submitButton);
+    } else {
+      els.createForm.appendChild(layout);
+    }
+  }
+  return {
+    layout,
+    basic: layout.querySelector('[data-section="basic"] .capability-form-section-body'),
+    advanced: layout.querySelector('[data-section="advanced"] .capability-form-section-body'),
+    expert: layout.querySelector('[data-section="expert"] .capability-form-section-body')
+  };
+}
+
+function appendBlocks(container, blocks = []) {
+  if (!container) return;
+  blocks.filter(Boolean).forEach((block) => container.appendChild(block));
+}
+
+function setSectionVisibility(sectionEl, hasContent) {
+  if (!sectionEl) return;
+  sectionEl.classList.toggle('hidden', !hasContent);
+}
+
+function arrangeCreateFormBySchema(taskType, model, caps) {
+  const sections = ensureCapabilityDrivenFormSections();
+  if (!sections) return;
+  const blocks = getCreateFormBlockRefs();
+  const modelId = String(model?.id || '');
+  const schemaEntry = getCapabilitySchemaEntry(taskType, modelId);
+  const fieldMap = getSchemaVisibleFieldMap(taskType, modelId);
+  if (!fieldMap.size) {
+    sections.layout.classList.add('hidden');
+    return;
+  }
+  sections.layout.classList.remove('hidden');
+
+  const bucketSet = {
+    basic: new Set([blocks.typeField, blocks.modelRow]),
+    advanced: new Set(),
+    expert: new Set()
+  };
+  const addToBucket = (bucket, ...items) => items.filter(Boolean).forEach((item) => bucketSet[bucket].add(item));
+  const getBucket = (name, fallback = 'basic') => String(fieldMap.get(name)?.category || fallback);
+
+  addToBucket(getBucket('prompt', 'basic'), blocks.promptField);
+  addToBucket(getBucket('videoGenerationMode', 'basic'), blocks.storyboardPanel);
+  if (fieldMap.has('imageCount') || fieldMap.has('imageQuality')) addToBucket('basic', blocks.imageOptionRow);
+  if (fieldMap.has('aspectRatio') || fieldMap.has('imageSize')) addToBucket(getBucket('aspectRatio', 'basic'), blocks.sizeRow);
+  if (fieldMap.has('duration') || fieldMap.has('resolution')) addToBucket(getBucket(fieldMap.has('duration') ? 'duration' : 'resolution', 'basic'), blocks.resolutionRow);
+
+  if (taskType === 'image_to_video' && (fieldMap.has('sourceImage') || fieldMap.has('referenceImages'))) {
+    addToBucket(getBucket('sourceImage', 'basic'), blocks.imageToVideoInputPanel, blocks.imageToVideoSequenceWorkspace);
+  } else if (fieldMap.has('sourceImage') || fieldMap.has('referenceImages')) {
+    addToBucket(getBucket(fieldMap.has('sourceImage') ? 'sourceImage' : 'referenceImages', 'basic'), blocks.urlRow, blocks.assetRow, blocks.uploadRow, blocks.visualInputGuide, blocks.sourceImageHint, blocks.referenceImageHint);
+  }
+
+  if (fieldMap.has('negativePrompt')) addToBucket(getBucket('negativePrompt', 'advanced'), blocks.negativePromptField);
+  if (fieldMap.has('endFrameImage')) addToBucket(getBucket('endFrameImage', 'advanced'), blocks.endFrameGroup, blocks.endFrameUploadWrap, blocks.endFrameHint);
+  if (fieldMap.has('providerMode') || fieldMap.has('cfgScale')) addToBucket(getBucket(fieldMap.has('providerMode') ? 'providerMode' : 'cfgScale', 'advanced'), blocks.videoAdvancedRow, blocks.providerModeWrap, blocks.cfgScaleWrap);
+  if (fieldMap.has('cameraControl')) addToBucket(getBucket('cameraControl', 'advanced'), blocks.cameraControlGroup);
+  if (fieldMap.has('omniInputs')) addToBucket(getBucket('omniInputs', 'advanced'), blocks.omniInputsGroup, blocks.omniInputHint);
+  if (fieldMap.has('seed')) addToBucket(getBucket('seed', 'expert'), blocks.seedRow);
+
+  const basicBlocks = Array.from(bucketSet.basic);
+  const advancedBlocks = Array.from(bucketSet.advanced);
+  const expertBlocks = Array.from(bucketSet.expert);
+
+  appendBlocks(sections.basic, basicBlocks);
+  appendBlocks(sections.advanced, advancedBlocks);
+  appendBlocks(sections.expert, expertBlocks);
+
+  const sectionNodes = sections.layout.querySelectorAll('.capability-form-section');
+  setSectionVisibility(sectionNodes[0], Array.from(sections.basic.children).some((node) => !node.classList.contains('hidden')));
+  setSectionVisibility(sectionNodes[1], Array.from(sections.advanced.children).some((node) => !node.classList.contains('hidden')));
+  setSectionVisibility(sectionNodes[2], Array.from(sections.expert.children).some((node) => !node.classList.contains('hidden')));
 }
 
 function getVisualInputSemantics(taskType, caps, generationMode) {
@@ -1976,6 +4099,7 @@ function buildInputRoleSummary(taskType, caps, generationMode) {
 }
 
 function buildTaskTypeGuide(taskType, caps, generationMode) {
+  const isVeoModel = isVeoTaskModel(currentModel());
   if (taskType === 'text_to_video') {
     if (generationMode === 'storyboard') {
       return '任务边界：当前是文生视频里的 Storyboard Prompt 模式。提交主体是结构化文本分镜，不发送首帧、参考图、尾帧或 Omni 素材。';
@@ -1983,11 +4107,21 @@ function buildTaskTypeGuide(taskType, caps, generationMode) {
     if (generationMode === 'intelligent') {
       return '任务边界：当前是文生视频里的智能分镜模式。提交主体是 prompt 和模型分镜能力，不等同于图生视频，也不等同于手工 Storyboard 编辑。';
     }
+    if (isVeoModel && caps.supportsPromptOptimize) {
+      return caps.supportsTextToVideoReferenceImages
+        ? '任务边界：当前是 Veo 文生视频。主输入是 prompt，参考图只做主体或风格约束，不是首帧；提交前可先用模型提示词优化整理动作、镜头和节奏。'
+        : '任务边界：当前是 Veo 文生视频。主输入是 prompt，画面由模型直接生成；如果当前模型开放了提示词优化，建议先优化再提交。';
+    }
     return caps.supportsTextToVideoReferenceImages
       ? '任务边界：当前是文生视频。主输入是文本提示；参考图如果开放，只用于约束主体、风格或镜头，不会被当作首帧。'
       : '任务边界：当前是文生视频。主输入只有文本提示，画面由模型从文本直接生成。';
   }
   if (taskType === 'image_to_video') {
+    if (isVeoModel && caps.supportsPromptOptimize) {
+      return caps.supportsImageToVideoEndFrame
+        ? '任务边界：当前是 Veo 图生视频。第 1 张输入图决定起始画面，尾帧控制结束画面；如果模型支持提示词优化，建议先把动作和镜头目标优化清楚。'
+        : '任务边界：当前是 Veo 图生视频。必须有第 1 张输入图作为起始画面；如果模型开放参考图，它们只做补充约束，不会替代首图。';
+    }
     return caps.supportsImageToVideoEndFrame
       ? '任务边界：当前是图生视频。首帧/输入图决定起始画面，尾帧决定结束画面；两者都属于模型特征，不是所有模型都支持。'
       : '任务边界：当前是图生视频。必须有一张输入图作为起始画面；如果模型支持附加参考图，它们只做补充约束。';
@@ -2023,6 +4157,7 @@ function renderFieldGuide(entries = []) {
 
 function buildFieldGuideEntries(taskType, caps, generationMode) {
   const entries = [];
+  const isVeoModel = isVeoTaskModel(currentModel());
   const add = (title, kind, purpose, recommendation) => {
     entries.push({ title, kind, purpose, recommendation });
   };
@@ -2045,6 +4180,14 @@ function buildFieldGuideEntries(taskType, caps, generationMode) {
       '输入项',
       '这是主输入。模型会主要根据这里的文本描述生成画面或视频。',
       '推荐写清主体、场景、动作、镜头、光线和风格，不要只写很短的关键词。'
+    );
+  }
+  if ((taskType === 'text_to_video' || taskType === 'image_to_video') && isVeoModel && caps.supportsPromptOptimize) {
+    add(
+      '模型提示词优化',
+      '模型能力 / 提交前',
+      '当前 Veo 模型开放了提示词优化入口，可以先把动作、镜头、节奏和风格整理成更适合视频生成的版本，再正式提交。',
+      '先写清主体、动作、镜头和节奏，再点“按当前模型优化提示词”；优化后检查是否仍保留你的主体约束与关键细节。'
     );
   }
   if (taskType === 'image_edit') {
@@ -2237,6 +4380,26 @@ function defaultStoryboardShots() {
     createStoryboardShot({ title: '主体镜头', prompt: '', duration: '' }),
     createStoryboardShot({ title: '结尾镜头', prompt: '', duration: '' })
   ];
+}
+
+function soraPromptSeed(taskType = currentTaskType()) {
+  if (taskType === 'image_to_video') {
+    return 'cinematic motion, subject remains consistent with the input images, natural camera movement, coherent lighting, realistic detail, clean background transitions';
+  }
+  return 'a cinematic scene with clear subject motion, strong composition, controlled camera movement, natural lighting, and a satisfying ending beat';
+}
+
+function bridgePromptSeed(taskType = currentTaskType()) {
+  if (taskType === 'text_to_image') {
+    return 'editorial product photography, clear focal subject, premium material detail, balanced negative space, soft directional lighting, clean background, high image fidelity';
+  }
+  if (taskType === 'image_edit') {
+    return 'edit the source image while preserving the core subject identity and composition, refine texture and lighting, keep edges clean, avoid unrelated new objects, deliver a polished final image';
+  }
+  if (taskType === 'image_to_video') {
+    return 'animate the first input image directly, keep the subject identity and scene layout consistent with the input images, add only motivated motion, controlled camera movement, stable lighting, and a clean ending beat';
+  }
+  return 'a cinematic scene with clear subject motion, strong composition, controlled camera movement, natural lighting, and a satisfying ending beat';
 }
 
 function getGenerationModeOptions(taskType, caps) {
@@ -2512,7 +4675,10 @@ function applyCreateFormRulesV2() {
   const isImageToVideo = taskType === 'image_to_video';
   const isImageEdit = taskType === 'image_edit';
   const model = currentModel();
+  const modelId = String(model?.id || '');
   const caps = getModelCapabilities(model, taskType);
+  const schemaDrivenVideoTask = isVeoFamilyModel(model) && (taskType === 'text_to_video' || taskType === 'image_to_video');
+  const schemaAllows = (...names) => !schemaDrivenVideoTask || schemaAllowsAnyField(taskType, modelId, names);
 
   showElement(els.imageModelWrap, !isVideo);
   showElement(els.videoModelWrap, isVideo);
@@ -2529,17 +4695,23 @@ function applyCreateFormRulesV2() {
     : (taskType === 'text_to_video'
         ? caps.supportsTextToVideoReferenceImages
         : (taskType === 'text_to_image' ? caps.supportsTextToImageReferenceImages : caps.supportsReferenceImage));
-  const canEndFrame = caps.supportsImageToVideoEndFrame;
-  const canProviderMode = isVideo && caps.supportsProviderMode && Array.isArray(caps.providerModeOptions) && caps.providerModeOptions.length > 0;
-  const canCfgScale = isVideo && caps.supportsCfgScale;
-  const canCameraControl = taskType === 'text_to_video' && caps.supportsDirectionalCameraControls;
-  const canOmniInputs = caps.supportsOmniInputs;
+  const canEndFrame = caps.supportsImageToVideoEndFrame && schemaAllows('endFrameImage');
+  const canProviderMode = isVideo && caps.supportsProviderMode && Array.isArray(caps.providerModeOptions) && caps.providerModeOptions.length > 0 && schemaAllows('providerMode');
+  const canCfgScale = isVideo && caps.supportsCfgScale && schemaAllows('cfgScale');
+  const canCameraControl = taskType === 'text_to_video' && caps.supportsDirectionalCameraControls && schemaAllows('cameraControl');
+  const canOmniInputs = caps.supportsOmniInputs && schemaAllows('omniInputs');
   const generationMode = String(els.videoGenerationMode?.value || 'standard');
   const storyboardMode = generationMode === 'storyboard';
   const intelligentMode = generationMode === 'intelligent';
   const semantics = getVisualInputSemantics(taskType, caps, generationMode);
-  const showReferenceInputs = !usesUnifiedPrimaryImage && canReference;
+  const showReferenceInputs = canReference && schemaAllows('referenceImages');
   const hidesVisualInputsForStructuredMode = semantics.hidesVisualInputs;
+  updateSoraWorkflowPanel(taskType, caps, generationMode);
+  updateBridgeSubmitPanel(taskType, caps, generationMode);
+  updateImageToVideoPromptGuide();
+  updatePromptOptimizePanel(taskType, caps);
+  renderCapabilityFieldLayout(taskType, model, caps, generationMode);
+  arrangeCreateFormBySchema(taskType, model, caps);
 
   clearImageInputHints();
   setFieldLabel(els.sourceImageWrap, semantics.sourceLabel);
@@ -2566,9 +4738,19 @@ function applyCreateFormRulesV2() {
     normalizeImageToVideoPrimaryInputs();
   }
   if (els.referenceAssetSelect) {
-    const supportsMultipleReferenceImages = Boolean(caps.supportsMultipleReferenceImages);
+    const supportsMultipleReferenceImages = isImageToVideo
+      ? Boolean(caps.supportsImageToVideoReferenceImages && caps.supportsMultipleReferenceImages)
+      : Boolean(caps.supportsMultipleReferenceImages);
     els.referenceAssetSelect.multiple = supportsMultipleReferenceImages;
     els.referenceAssetSelect.size = supportsMultipleReferenceImages ? Math.min(caps.maxReferenceImages || 4, 4) : 1;
+  }
+  if (els.referenceUploadInput) {
+    els.referenceUploadInput.multiple = isImageToVideo
+      ? Boolean(caps.supportsImageToVideoReferenceImages && caps.supportsMultipleReferenceImages)
+      : Boolean(caps.supportsMultipleReferenceImages);
+  }
+  if (els.referenceImageUrl?.tagName === 'TEXTAREA') {
+    els.referenceImageUrl.rows = ((isImageToVideo && caps.supportsImageToVideoReferenceImages) || caps.supportsMultipleReferenceImages) ? 4 : 2;
   }
 
   showElement(els.sourceImageWrap, canSource && !hidesVisualInputsForStructuredMode);
@@ -2579,17 +4761,36 @@ function applyCreateFormRulesV2() {
   showElement(els.referenceUploadWrap, showReferenceInputs && !hidesVisualInputsForStructuredMode);
   showElement(els.endFrameGroup, canEndFrame && !hidesVisualInputsForStructuredMode);
   showElement(els.endFrameUploadWrap, canEndFrame && !hidesVisualInputsForStructuredMode);
+  showElement(els.imageToVideoInputPanel, isImageToVideo && schemaAllows('sourceImage', 'referenceImages') && !hidesVisualInputsForStructuredMode);
+  showElement(els.imageToVideoSequenceWorkspace, isImageToVideo && schemaAllows('sourceImage', 'referenceImages') && !hidesVisualInputsForStructuredMode);
+  showElement(els.imageToVideoLocalWorkspace, false);
+  showElement(els.imageToVideoUrlWorkspace, false);
   showElement(els.videoAdvancedRow, (canProviderMode || canCfgScale) && !storyboardMode);
   showElement(els.providerModeWrap, canProviderMode && !storyboardMode);
   showElement(els.cfgScaleWrap, canCfgScale && !storyboardMode);
   showElement(els.cameraControlGroup, canCameraControl && !storyboardMode);
   showElement(els.omniInputsGroup, canOmniInputs && !hidesVisualInputsForStructuredMode);
-  showElement(els.negativePrompt?.closest('label'), Boolean(caps.supportsNegativePrompt));
+  showElement(els.negativePrompt?.closest('label'), Boolean(caps.supportsNegativePrompt) && schemaAllows('negativePrompt'));
   showElement(els.visualInputGuide, Boolean(semantics.visualGuide) && (canSource || showReferenceInputs || canEndFrame || canOmniInputs || hidesVisualInputsForStructuredMode));
   showElement(els.sourceImageHint, Boolean(semantics.sourceHint) && canSource && !hidesVisualInputsForStructuredMode);
   showElement(els.referenceImageHint, Boolean(semantics.referenceHint) && showReferenceInputs && !hidesVisualInputsForStructuredMode);
   showElement(els.endFrameHint, Boolean(semantics.endFrameHint) && canEndFrame && !hidesVisualInputsForStructuredMode);
   showElement(els.omniInputHint, Boolean(semantics.omniHint) && canOmniInputs && !hidesVisualInputsForStructuredMode);
+  if (isImageToVideo && !hidesVisualInputsForStructuredMode) {
+    showElement(els.sourceImageWrap, false);
+    showElement(els.sourceAssetWrap, false);
+    showElement(els.sourceUploadWrap, false);
+    showElement(els.referenceImageWrap, false);
+    showElement(els.referenceAssetWrap, false);
+    showElement(els.referenceUploadWrap, false);
+    showElement(els.sourceImageHint, false);
+    showElement(els.referenceImageHint, false);
+  }
+  if (isImageToVideo && !hidesVisualInputsForStructuredMode) {
+    updateImageToVideoInputSummary(caps);
+  } else if (els.imageToVideoInputSummary) {
+    els.imageToVideoInputSummary.textContent = '';
+  }
 
   if (canProviderMode && els.providerMode) {
     const providerModeLabel = document.querySelector('label[for="providerMode"]');
@@ -2732,6 +4933,10 @@ function applyCreateFormRulesV2() {
       tips.push(`时长范围 ${min}-${max} 秒`);
     }
     els.modelCapabilityHint.textContent = tips.length ? `模型能力：${tips.join(' / ')}` : '';
+    if ((taskType === 'text_to_video' || taskType === 'image_to_video') && caps.supportsPromptOptimize && !tips.includes('支持模型提示词优化')) {
+      tips.push('支持模型提示词优化');
+      els.modelCapabilityHint.textContent = tips.length ? `模型能力：${tips.join(' / ')}` : '';
+    }
     if (els.modelRoleHint) {
       els.modelRoleHint.textContent = buildInputRoleSummary(taskType, caps, generationMode);
     }
@@ -2746,6 +4951,7 @@ function applyCreateFormRulesV2() {
 
 function renderAssets() {
   const imageAssets = state.assets.filter((a) => a.kind === 'image');
+  const activeTaskType = String(els.typeSelect?.value || '');
   const selectedSourceAssetId = String(els.sourceAssetSelect?.value || '').trim();
   const selectedReferenceAssetIds = new Set(Array.from(els.referenceAssetSelect?.selectedOptions || []).map((option) => option.value));
   const selectedEndFrameAssetId = String(els.endFrameAssetSelect?.value || '').trim();
@@ -2763,8 +4969,8 @@ function renderAssets() {
         ${preview}
         <div class="asset-meta">${escapeHtml(asset.originalName || asset.id)}</div>
         <div class="asset-actions">
-          <button type="button" class="secondary-button" data-action="use-source" data-id="${escapeAttr(asset.id)}">设为源图</button>
-          <button type="button" class="secondary-button" data-action="use-ref" data-id="${escapeAttr(asset.id)}">设为参考图</button>
+          <button type="button" class="secondary-button" data-action="use-source" data-id="${escapeAttr(asset.id)}">${activeTaskType === 'image_to_video' ? '设为第 1 张' : '设为源图'}</button>
+          <button type="button" class="secondary-button" data-action="use-ref" data-id="${escapeAttr(asset.id)}">${activeTaskType === 'image_to_video' ? '加入附加图' : '设为参考图'}</button>
           <button type="button" class="secondary-button" data-action="use-end" data-id="${escapeAttr(asset.id)}">设为尾帧</button>
           <button type="button" data-action="delete-asset" data-id="${escapeAttr(asset.id)}">删除</button>
         </div>
@@ -2780,14 +4986,219 @@ function renderAssets() {
   els.endFrameAssetSelect.innerHTML = options;
   if (selectedSourceAssetId) els.sourceAssetSelect.value = selectedSourceAssetId;
   if (selectedEndFrameAssetId) els.endFrameAssetSelect.value = selectedEndFrameAssetId;
-  Array.from(els.referenceAssetSelect.options || []).forEach((option) => {
-    option.selected = selectedReferenceAssetIds.has(option.value);
-  });
+  state.imageToVideoSourceAssetId = String(state.imageToVideoSourceAssetId || selectedSourceAssetId || '').trim();
+  state.imageToVideoReferenceAssetOrder = state.imageToVideoReferenceAssetOrder.length
+    ? state.imageToVideoReferenceAssetOrder.filter((id) => imageAssets.some((asset) => asset.id === id))
+    : Array.from(selectedReferenceAssetIds);
+  state.imageToVideoInputSequence = getImageToVideoInputSequence().filter((item) => item.kind !== 'asset' || imageAssets.some((asset) => asset.id === item.value));
+  applyImageToVideoSequenceToLegacyState();
+  applyImageToVideoAssetStateToForm();
+  if (els.referenceAssetHelp) {
+    const selectedCount = state.imageToVideoReferenceAssetOrder.length || Array.from(els.referenceAssetSelect?.selectedOptions || []).filter((option) => option.value).length;
+    const totalCount = imageAssets.length;
+    const baseHelp = els.referenceAssetHelp.textContent.split(' 当前素材库可选 ')[0];
+    els.referenceAssetHelp.textContent = `${baseHelp} 当前素材库可选 ${totalCount} 张，已选 ${selectedCount} 张。`;
+  }
+  renderImageToVideoSequenceWorkspace();
+  renderImageToVideoLocalWorkspace();
 }
 
 function getTaskLabel(type) {
   const meta = state.taskTypes.find((item) => item.value === type);
   return meta?.label || type;
+}
+
+function getTaskModelSnapshot(task) {
+  const modelId = String(task?.input?.model || '').trim();
+  if (!modelId) return null;
+  return state.modelById.get(modelId) || { id: modelId };
+}
+
+function countTaskInputReferences(input = {}) {
+  const urlItems = Array.isArray(input.referenceImageUrls)
+    ? input.referenceImageUrls
+    : String(input.referenceImageUrl || '')
+      .split(/\r?\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  const assetItems = Array.isArray(input.referenceAssetIds)
+    ? input.referenceAssetIds
+    : [String(input.referenceAssetId || '').trim()].filter(Boolean);
+  return urlItems.length + assetItems.length;
+}
+
+function hasTaskPrimaryImage(input = {}) {
+  return Boolean(String(input.sourceImageUrl || '').trim() || String(input.sourceAssetId || '').trim());
+}
+
+function hasTaskEndFrame(input = {}) {
+  return Boolean(String(input.endFrameImageUrl || '').trim() || String(input.endFrameAssetId || '').trim());
+}
+
+function getTaskVisualSubmissionSummary(task) {
+  const input = task?.input || {};
+  const taskType = String(task?.type || '').trim();
+  const model = getTaskModelSnapshot(task);
+  const caps = getModelCapabilities(model, taskType);
+  const family = getBridgeVideoModelFamilyLabel(model);
+  const referenceCount = countTaskInputReferences(input);
+  const primaryReady = hasTaskPrimaryImage(input);
+  const endFrameReady = hasTaskEndFrame(input);
+  const parts = [];
+
+  if (taskType === 'image_to_video') {
+    parts.push(`${family}`);
+    parts.push(primaryReady ? '第 1 张已提交' : '缺第 1 张');
+    if (caps.supportsImageToVideoReferenceImages) {
+      parts.push(referenceCount ? `参考图 ${referenceCount} 张` : '无参考图');
+    } else if (referenceCount) {
+      parts.push(`参考图 ${referenceCount} 张未提交`);
+    }
+    if (caps.supportsImageToVideoEndFrame) {
+      parts.push(endFrameReady ? '尾帧已提交' : '无尾帧');
+    } else if (endFrameReady) {
+      parts.push('尾帧未提交');
+    }
+    return parts.join(' / ');
+  }
+
+  if (taskType === 'text_to_video') {
+    parts.push(`${family}`);
+    parts.push('Prompt');
+    if (caps.supportsTextToVideoReferenceImages) {
+      parts.push(referenceCount ? `参考图 ${referenceCount} 张` : '无参考图');
+    } else if (referenceCount) {
+      parts.push(`参考图 ${referenceCount} 张未提交`);
+    }
+    return parts.join(' / ');
+  }
+
+  if (taskType === 'image_edit') {
+    parts.push(hasTaskPrimaryImage(input) ? '原图已提交' : '缺原图');
+    if (referenceCount) parts.push(`参考图 ${referenceCount} 张`);
+    return parts.join(' / ');
+  }
+
+  if (taskType === 'text_to_image') {
+    parts.push('Prompt');
+    if (referenceCount) parts.push(`参考图 ${referenceCount} 张`);
+    return parts.join(' / ');
+  }
+
+  return '';
+}
+
+function getTaskParameterSummary(task) {
+  const input = task?.input || {};
+  const bits = [];
+  if (String(input.aspectRatio || '').trim()) bits.push(String(input.aspectRatio).trim());
+  if (String(input.imageSize || '').trim()) bits.push(String(input.imageSize).trim());
+  if (String(input.resolution || '').trim()) bits.push(String(input.resolution).trim());
+  if (input.duration != null && String(input.duration).trim()) bits.push(`${input.duration}s`);
+  return bits.join(' / ');
+}
+
+function getTaskPreviewTags(task) {
+  const input = task?.input || {};
+  const taskType = String(task?.type || '').trim();
+  const model = getTaskModelSnapshot(task);
+  const caps = getModelCapabilities(model, taskType);
+  const family = getBridgeVideoModelFamilyLabel(model);
+  const referenceCount = countTaskInputReferences(input);
+  const primaryReady = hasTaskPrimaryImage(input);
+  const endFrameReady = hasTaskEndFrame(input);
+  const tags = [];
+
+  if (taskType === 'text_to_video' || taskType === 'image_to_video') tags.push({ text: family });
+  if (String(input.aspectRatio || '').trim()) tags.push({ text: String(input.aspectRatio).trim() });
+  if (String(input.imageSize || '').trim()) tags.push({ text: String(input.imageSize).trim() });
+  if (String(input.resolution || '').trim()) tags.push({ text: String(input.resolution).trim() });
+  if (input.duration != null && String(input.duration).trim()) tags.push({ text: `${input.duration}s` });
+
+  if (taskType === 'image_to_video') {
+    tags.push({ text: primaryReady ? '首帧已提交' : '缺首帧', warning: !primaryReady });
+    if (caps.supportsImageToVideoReferenceImages) {
+      tags.push({ text: referenceCount ? `参考图 ${referenceCount} 张` : '无参考图' });
+    } else if (referenceCount) {
+      tags.push({ text: `参考图 ${referenceCount} 张未提交`, warning: true });
+    }
+    if (caps.supportsImageToVideoEndFrame) {
+      tags.push({ text: endFrameReady ? '尾帧已提交' : '无尾帧' });
+    } else if (endFrameReady) {
+      tags.push({ text: '尾帧未提交', warning: true });
+    }
+  } else if (taskType === 'text_to_video') {
+    if (caps.supportsTextToVideoReferenceImages) {
+      tags.push({ text: referenceCount ? `参考图 ${referenceCount} 张` : '无参考图' });
+    } else if (referenceCount) {
+      tags.push({ text: `参考图 ${referenceCount} 张未提交`, warning: true });
+    }
+  } else if (taskType === 'image_edit') {
+    tags.push({ text: hasTaskPrimaryImage(input) ? '原图已提交' : '缺原图', warning: !hasTaskPrimaryImage(input) });
+    if (referenceCount) tags.push({ text: `参考图 ${referenceCount} 张` });
+  } else if (taskType === 'text_to_image') {
+    tags.push({ text: 'Prompt' });
+    if (referenceCount) tags.push({ text: `参考图 ${referenceCount} 张` });
+  }
+
+  return tags.slice(0, 8);
+}
+
+function getCompareTasks() {
+  const ids = Array.isArray(state.compareTaskIds) ? state.compareTaskIds.slice(0, 2) : [];
+  return ids
+    .map((id) => state.tasks.find((task) => task.id === id) || null)
+    .filter(Boolean);
+}
+
+function getTaskCompareDifferences(tasks = []) {
+  if (!Array.isArray(tasks) || tasks.length < 2) return [];
+  const [left, right] = tasks;
+  const diffs = [];
+  if (String(left.type || '') !== String(right.type || '')) diffs.push('任务类型');
+  if (String(left.input?.model || '') !== String(right.input?.model || '')) diffs.push('模型');
+  if (getTaskVisualSubmissionSummary(left) !== getTaskVisualSubmissionSummary(right)) diffs.push('输入结构');
+  if (getTaskParameterSummary(left) !== getTaskParameterSummary(right)) diffs.push('参数');
+  if (summarizeTaskPrompt(left) !== summarizeTaskPrompt(right)) diffs.push('Prompt');
+  return diffs;
+}
+
+function renderTaskComparePanel() {
+  if (!els.taskComparePanel || !els.taskCompareSummary || !els.taskCompareGrid) return;
+  const tasks = getCompareTasks();
+  if (!tasks.length) {
+    showElement(els.taskComparePanel, false);
+    els.taskCompareSummary.textContent = '';
+    els.taskCompareGrid.innerHTML = '';
+    return;
+  }
+  const diffs = getTaskCompareDifferences(tasks);
+  if (tasks.length === 1) {
+    els.taskCompareSummary.textContent = '已选 1 条任务，再点另一条“对比”。';
+  } else {
+    els.taskCompareSummary.textContent = diffs.length ? `当前差异：${diffs.join(' / ')}` : '两条任务当前没有关键差异。';
+  }
+  els.taskCompareGrid.innerHTML = tasks.map((task, index) => {
+    const model = String(task.input?.model || '-');
+    const status = String(task.status || 'unknown');
+    const prompt = summarizeTaskPrompt(task);
+    const visualSummary = getTaskVisualSubmissionSummary(task);
+    const parameterSummary = getTaskParameterSummary(task);
+    const tags = getTaskPreviewTags(task).slice(0, 6);
+    return `
+      <article class="task-compare-card">
+        <div class="task-compare-card-top">
+          <strong>${index === 0 ? '对比 A' : '对比 B'}</strong>
+          <span class="pill">${escapeHtml(status)}</span>
+        </div>
+        <div class="task-compare-card-meta">${escapeHtml(getTaskLabel(task.type))} / ${escapeHtml(model)}</div>
+        <div class="task-compare-tags">${tags.map((tag) => `<span class="task-compare-tag${tag.warning ? ' task-compare-tag-warning' : ''}">${escapeHtml(tag.text)}</span>`).join('')}</div>
+        ${visualSummary ? `<div class="task-compare-line">输入：${escapeHtml(visualSummary)}</div>` : ''}
+        ${parameterSummary ? `<div class="task-compare-line">参数：${escapeHtml(parameterSummary)}</div>` : ''}
+        <div class="task-compare-line">Prompt: ${escapeHtml(prompt || '（空）')}</div>
+      </article>`;
+  }).join('');
+  showElement(els.taskComparePanel, true);
 }
 
 function summarizeTaskPrompt(task) {
@@ -2822,10 +5233,14 @@ function renderTasks() {
 
   els.tasks.innerHTML = state.tasks.map((task) => {
     const activeClass = task.id === state.selectedTaskId ? ' task-active' : '';
+    const comparing = state.compareTaskIds.includes(task.id);
     const model = task.input?.model || '-';
     const status = task.status || 'unknown';
     const prompt = summarizeTaskPrompt(task);
     const mode = summarizeTaskMode(task);
+    const visualSummary = getTaskVisualSubmissionSummary(task);
+    const parameterSummary = getTaskParameterSummary(task);
+    const taskTags = getTaskPreviewTags(task).slice(0, 5);
     const percent = taskProgress(status);
     const localCount = Array.isArray(task.savedAssets) ? task.savedAssets.length : 0;
     const errorText = task.error?.message ? `<div class="task-error">${escapeHtml(task.error.message)}</div>` : '';
@@ -2838,17 +5253,23 @@ function renderTasks() {
         <div class="task-progress"><div class="task-progress-bar" style="width:${percent}%"></div></div>
         <div>模型：${escapeHtml(model)}${mode ? ` / ${escapeHtml(mode)}` : ''}</div>
         <div>本地保存：${localCount} 个文件</div>
+        ${taskTags.length ? `<div class="task-tags">${taskTags.map((tag) => `<span class="task-tag${tag.warning ? ' task-tag-warning' : ''}">${escapeHtml(tag.text)}</span>`).join('')}</div>` : ''}
+        ${visualSummary ? `<div class="task-prompt">输入：${escapeHtml(visualSummary)}</div>` : ''}
+        ${parameterSummary ? `<div class="task-prompt">参数：${escapeHtml(parameterSummary)}</div>` : ''}
         <div class="task-prompt">Prompt: ${escapeHtml(prompt || '（空）')}</div>
         ${errorText}
         <div class="config-actions">
           <button type="button" data-action="task-refresh" data-id="${escapeAttr(task.id)}">刷新状态</button>
           <button type="button" data-action="task-retry" data-id="${escapeAttr(task.id)}">重试</button>
           <button type="button" data-action="task-cancel" data-id="${escapeAttr(task.id)}">取消</button>
+          <button type="button" class="secondary-button" data-action="task-reuse" data-id="${escapeAttr(task.id)}">复用</button>
+          <button type="button" class="secondary-button${comparing ? ' task-compare-toggle-active' : ''}" data-action="task-compare" data-id="${escapeAttr(task.id)}">${comparing ? '取消对比' : '对比'}</button>
           <button type="button" class="secondary-button" data-action="task-preview" data-id="${escapeAttr(task.id)}">预览</button>
           <button type="button" class="secondary-button" data-action="task-delete" data-id="${escapeAttr(task.id)}">删除</button>
         </div>
       </article>`;
   }).join('');
+  renderTaskComparePanel();
 }
 
 function getTaskOutputUrl(task) {
@@ -2866,6 +5287,7 @@ function renderPreview(task) {
     els.previewCard.classList.add('hidden');
     els.previewState.classList.remove('hidden');
     els.previewState.textContent = '选择任务后可在这里预览，并下载到浏览器或保存到本地目录。';
+    if (els.previewTags) els.previewTags.innerHTML = '';
     return;
   }
 
@@ -2876,7 +5298,20 @@ function renderPreview(task) {
   const isVideo = task.type.includes('video');
   const status = task.status || 'unknown';
   const model = task.input?.model || '-';
-  els.previewMeta.textContent = `任务类型：${getTaskLabel(task.type)} | 状态：${status} | 模型：${model}`;
+  const visualSummary = getTaskVisualSubmissionSummary(task);
+  const parameterSummary = getTaskParameterSummary(task);
+  const previewTags = getTaskPreviewTags(task);
+  const previewLines = [
+    `任务类型：${getTaskLabel(task.type)} | 状态：${status} | 模型：${model}`
+  ];
+  if (visualSummary) previewLines.push(`输入：${visualSummary}`);
+  if (parameterSummary) previewLines.push(`参数：${parameterSummary}`);
+  els.previewMeta.textContent = previewLines.join('\n');
+  if (els.previewTags) {
+    els.previewTags.innerHTML = previewTags
+      .map((tag) => `<span class="preview-tag${tag.warning ? ' preview-tag-warning' : ''}">${escapeHtml(tag.text)}</span>`)
+      .join('');
+  }
   els.openRemoteResult.href = `/api/v1/tasks/${encodeURIComponent(task.id)}/browser-download`;
 
   if (isVideo && safeOutputUrl) {
@@ -2925,9 +5360,14 @@ function restartAutoRefresh() {
 }
 
 async function loadMeta() {
-  const data = await api('/api/v1/meta');
+  const [data, capabilities] = await Promise.all([
+    api('/api/v1/meta'),
+    api('/api/v1/models/capabilities').catch(() => null)
+  ]);
   state.presets = Array.isArray(data.providerPresets) ? data.providerPresets : [];
-  state.taskTypes = Array.isArray(data.taskTypes) ? data.taskTypes : [];
+  state.taskTypes = (Array.isArray(data.taskTypes) ? data.taskTypes : [])
+    .filter((item) => ['text_to_image', 'image_edit', 'text_to_video', 'image_to_video'].includes(String(item?.value || '').trim()));
+  state.capabilitySchema = capabilities;
   renderPresets();
   renderTaskTypeOptions();
 }
@@ -2952,6 +5392,7 @@ async function loadStudioTasks() {
   state.studioTasks = Array.isArray(result.data) ? result.data : [];
   state.activeStudioTaskId = result.activeStudioTaskId || state.studioTasks[0]?.id || '';
   restoreSelectedTaskForActiveStudioTask();
+  restoreCompareTasksForActiveStudioTask();
   renderStudioTasks();
 }
 
@@ -2963,6 +5404,7 @@ async function activateStudioTask(studioTaskId) {
   });
   state.activeStudioTaskId = result.activeStudioTaskId || studioTaskId;
   restoreSelectedTaskForActiveStudioTask();
+  restoreCompareTasksForActiveStudioTask();
   state.tasks = [];
   renderStudioTasks();
   renderTasks();
@@ -2985,6 +5427,7 @@ async function createStudioTask() {
   state.studioTasks = Array.isArray(result.data) ? result.data : state.studioTasks;
   state.activeStudioTaskId = result.activeStudioTaskId || state.activeStudioTaskId;
   restoreSelectedTaskForActiveStudioTask();
+  restoreCompareTasksForActiveStudioTask();
   renderStudioTasks();
   restoreCreateDraft();
   applyCreateFormRulesV2();
@@ -3027,6 +5470,7 @@ async function deleteCurrentStudioTask() {
   state.studioTasks = Array.isArray(result.data) ? result.data : [];
   state.activeStudioTaskId = result.activeStudioTaskId || state.studioTasks[0]?.id || '';
   restoreSelectedTaskForActiveStudioTask();
+  restoreCompareTasksForActiveStudioTask();
   renderStudioTasks();
   restoreCreateDraft();
   applyCreateFormRulesV2();
@@ -3223,6 +5667,7 @@ async function loadTasks(silent = false) {
   if (state.selectedTaskId && !state.tasks.some((item) => item.id === state.selectedTaskId)) {
     state.selectedTaskId = '';
   }
+  state.compareTaskIds = state.compareTaskIds.filter((id) => state.tasks.some((item) => item.id === id)).slice(0, 2);
   if (!state.selectedTaskId && state.tasks.length) {
     restoreSelectedTaskForActiveStudioTask();
   }
@@ -3252,26 +5697,43 @@ function hasExplicitSizeCapability(caps) {
 }
 
 async function uploadImageInput(fileInput, targetSelect) {
-  const file = fileInput.files?.[0];
-  if (!file) return;
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-  await api('/api/v1/assets/upload', {
-    method: 'POST',
-    body: JSON.stringify({
-      kind: 'image',
-      name: file.name,
-      mimeType: file.type || 'image/png',
-      dataUrl
-    })
-  });
+  const files = Array.from(fileInput.files || []);
+  if (!files.length) return;
+  const uploadedAssetIds = [];
+  for (const file of files) {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    const uploaded = await api('/api/v1/assets/upload', {
+      method: 'POST',
+      body: JSON.stringify({
+        kind: 'image',
+        name: file.name,
+        mimeType: file.type || 'image/png',
+        dataUrl
+      })
+    });
+    if (uploaded?.asset?.id) uploadedAssetIds.push(uploaded.asset.id);
+  }
   await loadAssets();
   fileInput.value = '';
-  if (targetSelect) targetSelect.value = state.assets[0]?.id || '';
+  if (String(els.typeSelect?.value || '') === 'image_to_video' && targetSelect !== els.endFrameAssetSelect) {
+    const sequenceItems = uploadedAssetIds.map((id) => ({ kind: 'asset', value: id }));
+    if (targetSelect === els.sourceAssetSelect) {
+      appendImageToVideoInputSequence(sequenceItems, 'replace-primary');
+    } else {
+      appendImageToVideoInputSequence(sequenceItems);
+    }
+  } else if (targetSelect?.multiple) {
+    appendImageToVideoReferenceAssets(uploadedAssetIds);
+  } else if (targetSelect) {
+    targetSelect.value = uploadedAssetIds[0] || state.assets[0]?.id || '';
+    state.imageToVideoSourceAssetId = String(targetSelect.value || '').trim();
+  }
+  refreshImageToVideoInputSummaryFromCurrentSelection();
 }
 
 function getCreatePayload() {
@@ -3279,18 +5741,37 @@ function getCreatePayload() {
   const type = String(fd.get('type') || '');
   const model = state.modelById.get(selectedModelIdForTask(type)) || null;
   const caps = getModelCapabilities(model, type);
-  const sourceImageUrlValue = String(fd.get('sourceImageUrl') || '').trim();
-  const sourceAssetIdValue = String(fd.get('sourceAssetId') || '').trim();
-  const referenceImageUrls = String(fd.get('referenceImageUrl') || '')
-    .split(/\r?\n|,/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const referenceAssetIds = fd.getAll('referenceAssetId')
+  if (type === 'image_to_video') ensureImageToVideoSequenceState();
+  const sequenceSummary = type === 'image_to_video' ? getImageToVideoInputSequenceSummary() : null;
+  const sourceImageUrlValue = type === 'image_to_video'
+    ? String(sequenceSummary?.primary?.kind === 'url' ? sequenceSummary.primary.value : '').trim()
+    : String(fd.get('sourceImageUrl') || '').trim();
+  const sourceAssetIdValue = type === 'image_to_video'
+    ? String(sequenceSummary?.primary?.kind === 'asset' ? sequenceSummary.primary.value : '').trim()
+    : String(fd.get('sourceAssetId') || '').trim();
+  const referenceImageUrls = type === 'image_to_video'
+    ? sequenceSummary.referenceItems.filter((item) => item.kind === 'url').map((item) => item.value)
+    : String(fd.get('referenceImageUrl') || '')
+      .split(/\r?\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  const referenceAssetIds = (type === 'image_to_video'
+    ? sequenceSummary.referenceItems.filter((item) => item.kind === 'asset').map((item) => item.value)
+    : fd.getAll('referenceAssetId'))
     .map((item) => String(item || '').trim())
     .filter(Boolean);
-  const primaryImageUrl = sourceImageUrlValue || referenceImageUrls[0] || '';
-  const primaryAssetId = sourceAssetIdValue || referenceAssetIds[0] || '';
   const useReferenceAsPrimaryInput = type === 'image_to_video' && !caps.supportsSourceImage && caps.supportsImageToVideoFirstFrame;
+  let imageToVideoPrimaryImageUrl = sourceImageUrlValue;
+  let imageToVideoPrimaryAssetId = sourceAssetIdValue;
+  const imageToVideoReferenceImageUrls = [...referenceImageUrls];
+  const imageToVideoReferenceAssetIds = [...referenceAssetIds];
+  if (type === 'image_to_video' && !imageToVideoPrimaryImageUrl && !imageToVideoPrimaryAssetId) {
+    if (imageToVideoReferenceImageUrls.length) {
+      imageToVideoPrimaryImageUrl = imageToVideoReferenceImageUrls.shift();
+    } else if (imageToVideoReferenceAssetIds.length) {
+      imageToVideoPrimaryAssetId = imageToVideoReferenceAssetIds.shift();
+    }
+  }
   const videoGenerationMode = String(fd.get('videoGenerationMode') || 'standard').trim() || 'standard';
   const storyboardText = String(fd.get('storyboardText') || '').trim();
   const omniImageUrls = String(fd.get('omniImageUrls') || '').split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
@@ -3317,19 +5798,27 @@ function getCreatePayload() {
     imageSize: String(fd.get('imageSize') || '').trim(),
     aspectRatio: String(fd.get('aspectRatio') || '').trim(),
     duration: fd.get('duration') ? Number(fd.get('duration')) : undefined,
-    sourceImageUrl: type === 'image_to_video' ? (useReferenceAsPrimaryInput ? '' : primaryImageUrl) : sourceImageUrlValue,
-    sourceAssetId: type === 'image_to_video' ? (useReferenceAsPrimaryInput ? '' : primaryAssetId) : sourceAssetIdValue,
+    sourceImageUrl: type === 'image_to_video' ? (useReferenceAsPrimaryInput ? '' : imageToVideoPrimaryImageUrl) : sourceImageUrlValue,
+    sourceAssetId: type === 'image_to_video' ? (useReferenceAsPrimaryInput ? '' : imageToVideoPrimaryAssetId) : sourceAssetIdValue,
     referenceImageUrl: type === 'image_to_video'
-      ? (useReferenceAsPrimaryInput ? primaryImageUrl : '')
+      ? (
+          caps.supportsMultipleReferenceImages
+            ? (useReferenceAsPrimaryInput ? imageToVideoPrimaryImageUrl : '')
+            : (useReferenceAsPrimaryInput ? imageToVideoPrimaryImageUrl : (imageToVideoReferenceImageUrls[0] || ''))
+        )
       : (caps.supportsMultipleReferenceImages ? '' : (referenceImageUrls[0] || '')),
     referenceImageUrls: type === 'image_to_video'
-      ? undefined
+      ? (caps.supportsMultipleReferenceImages ? imageToVideoReferenceImageUrls : undefined)
       : (caps.supportsMultipleReferenceImages ? referenceImageUrls : undefined),
     referenceAssetId: type === 'image_to_video'
-      ? (useReferenceAsPrimaryInput ? primaryAssetId : '')
+      ? (
+          caps.supportsMultipleReferenceImages
+            ? (useReferenceAsPrimaryInput ? imageToVideoPrimaryAssetId : '')
+            : (useReferenceAsPrimaryInput ? imageToVideoPrimaryAssetId : (imageToVideoReferenceAssetIds[0] || ''))
+        )
       : (caps.supportsMultipleReferenceImages ? '' : (referenceAssetIds[0] || '')),
     referenceAssetIds: type === 'image_to_video'
-      ? undefined
+      ? (caps.supportsMultipleReferenceImages ? imageToVideoReferenceAssetIds : undefined)
       : (caps.supportsMultipleReferenceImages ? referenceAssetIds : undefined),
     endFrameImageUrl: String(fd.get('endFrameImageUrl') || '').trim(),
     endFrameAssetId: String(fd.get('endFrameAssetId') || '').trim(),
@@ -3541,7 +6030,203 @@ async function saveSelectedToLocal() {
   }
 }
 
+function setReuseSummary(summary = '', tags = []) {
+  if (!els.reuseSummaryPanel || !els.reuseSummaryText || !els.reuseSummaryTags) return;
+  const normalizedTags = Array.isArray(tags) ? tags.filter((tag) => tag && tag.text) : [];
+  const visible = Boolean(String(summary || '').trim() || normalizedTags.length);
+  showElement(els.reuseSummaryPanel, visible);
+  els.reuseSummaryText.textContent = summary || '';
+  els.reuseSummaryTags.innerHTML = normalizedTags
+    .map((tag) => `<span class="reuse-summary-tag${tag.warning ? ' reuse-summary-tag-warning' : ''}">${escapeHtml(tag.text)}</span>`)
+    .join('');
+}
+
+async function reuseTaskInput(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId) || await api(`/api/v1/tasks/${taskId}`);
+  const input = task?.input || {};
+  const taskType = String(task?.type || input.type || '').trim();
+  if (!taskType) throw new Error('任务缺少类型，无法复用');
+
+  const setIfPresent = (element, value) => {
+    if (!element) return;
+    element.value = value == null ? '' : String(value);
+  };
+  const setSelectIfOptionExists = (element, value, fallback = '') => {
+    if (!element) return;
+    const normalized = String(value || '').trim();
+    const options = Array.from(element.options || []).map((item) => item.value);
+    element.value = normalized && options.includes(normalized) ? normalized : fallback;
+  };
+
+  const reuseTags = [];
+  const reuseWarnings = [];
+
+  els.typeSelect.value = taskType;
+  await refreshCreateModelOptions();
+
+  const modelId = String(input.model || '').trim();
+  if (taskType.includes('video')) {
+    setSelectIfOptionExists(els.videoModel, modelId, els.videoModel.value || '');
+  } else {
+    setSelectIfOptionExists(els.imageModel, modelId, els.imageModel.value || '');
+  }
+  const appliedModelId = selectedModelIdForTask(taskType);
+  if (modelId) reuseTags.push({ text: `来源模型 ${modelId}` });
+  if (modelId && appliedModelId !== modelId) {
+    reuseWarnings.push(`当前改用 ${appliedModelId || '默认模型'}`);
+  } else if (appliedModelId) {
+    reuseTags.push({ text: `已切到 ${appliedModelId}` });
+  }
+
+  applyCreateFormRulesV2();
+  const appliedCaps = getModelCapabilities(currentModel(), taskType);
+
+  setIfPresent(els.prompt, input.prompt || '');
+  setIfPresent(els.negativePrompt, input.negativePrompt || '');
+  setIfPresent(els.storyboardText, input.storyboardText || '');
+  setIfPresent(els.providerMode, input.providerMode || '');
+  setIfPresent(els.cfgScale, input.cfgScale || '');
+  setIfPresent(els.cameraControlType, input.cameraControlType || '');
+  setIfPresent(els.cameraControlPan, input.cameraControlPan || '');
+  setIfPresent(els.cameraControlTilt, input.cameraControlTilt || '');
+  setIfPresent(els.cameraControlZoom, input.cameraControlZoom || '');
+  setIfPresent(els.omniImageUrls, Array.isArray(input.omniImageUrls) ? input.omniImageUrls.join('\n') : (input.omniImageUrls || ''));
+  setIfPresent(els.omniVideoUrls, Array.isArray(input.omniVideoUrls) ? input.omniVideoUrls.join('\n') : (input.omniVideoUrls || ''));
+  setIfPresent(els.elementList, Array.isArray(input.elementList) ? input.elementList.join('\n') : (input.elementList || ''));
+  setIfPresent(els.seed, input.seed || '');
+  setIfPresent(els.styleStrength, input.styleStrength || '');
+
+  if (els.videoGenerationMode) {
+    const desiredMode = String(input.videoGenerationMode || 'standard').trim() || 'standard';
+    setSelectIfOptionExists(els.videoGenerationMode, desiredMode, 'standard');
+    if (desiredMode !== String(els.videoGenerationMode.value || 'standard')) {
+      reuseWarnings.push(`模式回退为 ${els.videoGenerationMode.value || 'standard'}`);
+    }
+  }
+
+  applyCreateFormRulesV2();
+
+  setSelectIfOptionExists(els.aspectRatio, input.aspectRatio || '', '');
+  if (String(input.aspectRatio || '').trim()) {
+    if (String(els.aspectRatio.value || '').trim() === String(input.aspectRatio || '').trim()) reuseTags.push({ text: String(input.aspectRatio).trim() });
+    else reuseWarnings.push(`比例未恢复为 ${input.aspectRatio}`);
+  }
+  setSelectIfOptionExists(els.imageSize, input.imageSize || '', '');
+  if (String(input.imageSize || '').trim()) {
+    if (String(els.imageSize.value || '').trim() === String(input.imageSize || '').trim()) reuseTags.push({ text: String(input.imageSize).trim() });
+    else reuseWarnings.push(`档位未恢复为 ${input.imageSize}`);
+  }
+  syncResolutionOptions();
+
+  if (String(input.resolution || '').trim()) {
+    const resolution = String(input.resolution || '').trim();
+    setIfPresent(els.resolutionInput, resolution);
+    const presetValues = Array.from(els.resolutionPreset?.options || []).map((item) => item.value);
+    els.resolutionPreset.value = presetValues.includes(resolution) ? resolution : '__custom__';
+    reuseTags.push({ text: resolution });
+  } else {
+    setIfPresent(els.resolutionInput, '');
+  }
+
+  syncDurationInputForModel();
+  const durationValue = input.duration != null && String(input.duration).trim() ? String(input.duration).trim() : '';
+  if (!els.durationSelect.classList.contains('hidden')) {
+    setSelectIfOptionExists(els.durationSelect, durationValue, els.durationSelect.value || '');
+  } else {
+    setIfPresent(els.durationInput, durationValue);
+  }
+  syncDurationValueMirror();
+  if (durationValue) {
+    if (appliedCaps.supportsDuration) reuseTags.push({ text: `${durationValue}s` });
+    else reuseWarnings.push('时长未恢复');
+  }
+
+  if (taskType === 'image_to_video') {
+    const sequence = [];
+    if (String(input.sourceAssetId || '').trim()) sequence.push({ kind: 'asset', value: String(input.sourceAssetId).trim() });
+    else if (String(input.sourceImageUrl || '').trim()) sequence.push({ kind: 'url', value: String(input.sourceImageUrl).trim() });
+
+    const referenceAssetIds = Array.isArray(input.referenceAssetIds)
+      ? input.referenceAssetIds
+      : [String(input.referenceAssetId || '').trim()].filter(Boolean);
+    const referenceImageUrls = Array.isArray(input.referenceImageUrls)
+      ? input.referenceImageUrls
+      : String(input.referenceImageUrl || '')
+        .split(/\r?\n|,/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+    referenceAssetIds.forEach((id) => sequence.push({ kind: 'asset', value: String(id).trim() }));
+    referenceImageUrls.forEach((url) => sequence.push({ kind: 'url', value: String(url).trim() }));
+    const allowsRefs = Boolean(appliedCaps.supportsImageToVideoReferenceImages);
+    setImageToVideoInputSequence(allowsRefs ? sequence : sequence.slice(0, 1));
+    setIfPresent(els.endFrameImageUrl, input.endFrameImageUrl || '');
+    setIfPresent(els.endFrameAssetSelect, input.endFrameAssetId || '');
+    if (sequence.length) reuseTags.push({ text: '首帧已复用' });
+    if (referenceAssetIds.length || referenceImageUrls.length) {
+      if (allowsRefs) reuseTags.push({ text: `参考图 ${referenceAssetIds.length + referenceImageUrls.length} 张` });
+      else reuseWarnings.push('参考图未恢复');
+    }
+    if (String(input.endFrameImageUrl || '').trim() || String(input.endFrameAssetId || '').trim()) {
+      if (appliedCaps.supportsImageToVideoEndFrame) reuseTags.push({ text: '尾帧已复用' });
+      else reuseWarnings.push('尾帧未恢复');
+    }
+    refreshImageToVideoInputSummaryFromCurrentSelection();
+  } else {
+    setImageToVideoInputSequence([]);
+    setIfPresent(els.sourceImageUrl, input.sourceImageUrl || '');
+    setIfPresent(els.sourceAssetSelect, input.sourceAssetId || '');
+    const referenceAssetIds = Array.isArray(input.referenceAssetIds)
+      ? input.referenceAssetIds.map((item) => String(item).trim()).filter(Boolean)
+      : [String(input.referenceAssetId || '').trim()].filter(Boolean);
+    const referenceImageUrls = Array.isArray(input.referenceImageUrls)
+      ? input.referenceImageUrls
+      : String(input.referenceImageUrl || '')
+        .split(/\r?\n|,/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    setIfPresent(els.referenceImageUrl, referenceImageUrls.join('\n'));
+    if (els.referenceAssetSelect?.multiple) {
+      const selected = new Set(referenceAssetIds);
+      Array.from(els.referenceAssetSelect.options || []).forEach((option) => {
+        option.selected = selected.has(option.value);
+      });
+    } else {
+      setIfPresent(els.referenceAssetSelect, referenceAssetIds[0] || '');
+    }
+    setIfPresent(els.endFrameImageUrl, input.endFrameImageUrl || '');
+    setIfPresent(els.endFrameAssetSelect, input.endFrameAssetId || '');
+  }
+
+  syncImageToVideoAssetStateFromForm();
+  syncImageToVideoUrlStateFromForm();
+  refreshImageToVideoInputSummaryFromCurrentSelection();
+  applyCreateFormRulesV2();
+  persistUiState();
+  const summary = reuseWarnings.length
+    ? `已复用 ${task.input?.model || '该任务'}，但有 ${reuseWarnings.length} 项按当前模型降级。`
+    : `已复用 ${task.input?.model || '该任务'} 的输入配置。`;
+  setReuseSummary(summary, reuseTags.concat(reuseWarnings.map((text) => ({ text, warning: true }))));
+  setStatus(summary);
+  els.createForm?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 async function taskAction(action, id) {
+  if (action === 'task-compare') {
+    const current = Array.isArray(state.compareTaskIds) ? state.compareTaskIds.slice(0, 2) : [];
+    if (current.includes(id)) {
+      state.compareTaskIds = current.filter((item) => item !== id);
+    } else {
+      state.compareTaskIds = current.concat(id).slice(-2);
+    }
+    renderTasks();
+    persistUiState();
+    return;
+  }
+  if (action === 'task-reuse') {
+    await reuseTaskInput(id);
+    return;
+  }
   if (action === 'task-preview') {
     const latest = await api(`/api/v1/tasks/${id}`);
     renderPreview(latest);
@@ -3569,6 +6254,7 @@ async function taskAction(action, id) {
       state.selectedTaskId = '';
       renderPreview(null);
     }
+    state.compareTaskIds = state.compareTaskIds.filter((item) => item !== id);
     await loadTasks(false);
   }
 }
@@ -3580,22 +6266,32 @@ async function assetAction(action, id) {
     await loadAssets();
     return;
   }
-  if (action === 'use-source') els.sourceAssetSelect.value = id;
-  if (action === 'use-ref') {
-    if (taskType === 'image_to_video' && els.sourceAssetSelect) {
-      els.sourceAssetSelect.value = id;
-    } else if (els.referenceAssetSelect?.multiple) {
-      const option = Array.from(els.referenceAssetSelect.options || []).find((item) => item.value === id);
-      if (option) option.selected = true;
+  if (taskType === 'image_to_video' && action === 'use-source') {
+    appendImageToVideoInputSequence([{ kind: 'asset', value: id }], 'replace-primary');
+  } else if (action === 'use-source') {
+    els.sourceAssetSelect.value = id;
+    state.imageToVideoSourceAssetId = String(id || '').trim();
+  }
+  if (taskType === 'image_to_video' && action === 'use-ref') {
+    appendImageToVideoInputSequence([{ kind: 'asset', value: id }]);
+  } else if (action === 'use-ref') {
+    if (els.referenceAssetSelect?.multiple) {
+      appendImageToVideoReferenceAssets([id]);
     } else if (els.referenceAssetSelect) {
       els.referenceAssetSelect.value = id;
     }
   }
   if (action === 'use-end') els.endFrameAssetSelect.value = id;
+  refreshImageToVideoInputSummaryFromCurrentSelection();
   persistUiState();
 }
 
 function bindEvents() {
+  initQuickJumpBar();
+  initKeyboardShortcuts();
+  els.modeCreator?.addEventListener('click', () => applyProductMode('creator'));
+  els.modeOps?.addEventListener('click', () => applyProductMode('ops'));
+  els.modeAdmin?.addEventListener('click', () => applyProductMode('admin'));
   els.toggleAdvanced.addEventListener('click', () => {
     const hidden = els.advancedConfig.classList.toggle('hidden');
     els.toggleAdvanced.textContent = hidden ? '展开高级设置' : '收起高级设置';
@@ -3771,9 +6467,15 @@ function bindEvents() {
     persistUiState();
   });
   els.createForm.addEventListener('input', () => {
+    syncImageToVideoAssetStateFromForm();
+    syncImageToVideoUrlStateFromForm();
+    refreshImageToVideoInputSummaryFromCurrentSelection();
     persistUiState();
   });
   els.createForm.addEventListener('change', () => {
+    syncImageToVideoAssetStateFromForm();
+    syncImageToVideoUrlStateFromForm();
+    refreshImageToVideoInputSummaryFromCurrentSelection();
     persistUiState();
   });
 
@@ -3832,6 +6534,48 @@ function bindEvents() {
   els.deleteStudioTask?.addEventListener('click', () => {
     deleteCurrentStudioTask().catch((error) => alert(error.message));
   });
+  els.optimizePromptWithModel?.addEventListener('click', async () => {
+    const model = currentModel();
+    const taskType = String(els.optimizePromptWithModel?.dataset.taskType || currentTaskType()).trim();
+    const optimizePath = String(els.optimizePromptWithModel?.dataset.optimizePath || '').trim();
+    const prompt = String(els.prompt?.value || '').trim();
+    if (!model?.id) {
+      alert('请先选择模型。');
+      return;
+    }
+    if (!prompt) {
+      alert('请先填写提示词。');
+      return;
+    }
+    els.optimizePromptWithModel.disabled = true;
+    els.optimizePromptWithModel.textContent = '优化中...';
+    els.promptOptimizeStatus.textContent = '正在按当前模型优化提示词...';
+    showElement(els.promptOptimizeStatus, true);
+    try {
+      const result = await api('/api/v1/prompt/optimize-model', {
+        method: 'POST',
+        body: JSON.stringify({
+          model: model.id,
+          taskType,
+          prompt,
+          optimizePath
+        }),
+        timeoutMs: 120000
+      });
+      const optimizedPrompt = String(result.optimizedPrompt || '').trim();
+      if (optimizedPrompt) {
+        els.prompt.value = optimizedPrompt;
+        persistUiState();
+      }
+      els.promptOptimizeStatus.textContent = optimizedPrompt ? '提示词已按当前模型优化并回填。' : '优化完成，但未返回新的提示词。';
+    } catch (error) {
+      els.promptOptimizeStatus.textContent = error.message || '提示词优化失败。';
+    } finally {
+      showElement(els.promptOptimizeStatus, true);
+      els.optimizePromptWithModel.disabled = false;
+      els.optimizePromptWithModel.textContent = '按当前模型优化提示词';
+    }
+  });
 
   els.tasks.addEventListener('click', (event) => {
     const target = event.target.closest('button');
@@ -3841,6 +6585,13 @@ function bindEvents() {
     if (!action || !id) return;
     taskAction(action, id).catch((error) => alert(error.message));
   });
+  els.taskComparePanel?.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-action="task-compare-clear"]');
+    if (!target) return;
+    state.compareTaskIds = [];
+    renderTasks();
+    persistUiState();
+  });
 
   els.assetLibrary.addEventListener('click', (event) => {
     const target = event.target.closest('button');
@@ -3849,6 +6600,648 @@ function bindEvents() {
     const id = target.dataset.id;
     if (!action || !id) return;
     assetAction(action, id).catch((error) => alert(error.message));
+  });
+  els.imageToVideoSequenceWorkspace?.addEventListener('click', (event) => {
+    const target = event.target.closest('button');
+    if (!target) return;
+    const action = String(target.dataset.action || '');
+    const key = String(target.dataset.sequenceKey || '').trim();
+    const caps = getModelCapabilities(currentModel(), currentTaskType());
+    const allowsReferenceInputs = supportsImageToVideoReferenceInputs(caps);
+    if (action === 'sequence-upload-primary') {
+      els.sourceUploadInput?.click();
+      return;
+    }
+    if (action === 'sequence-upload-reference') {
+      if (!allowsReferenceInputs) {
+        alert('当前模型不支持附加参考图，只会提交第 1 张输入图。');
+        return;
+      }
+      els.referenceUploadInput?.click();
+      return;
+    }
+    if (action === 'sequence-add-url') {
+      if (!allowsReferenceInputs && getImageToVideoInputSequenceSummary().primary) {
+        alert('当前模型不支持附加参考图。请替换第 1 张输入图，而不是继续添加参考图。');
+        return;
+      }
+      const value = window.prompt('输入图片 URL，可一次粘贴多行或逗号分隔');
+      if (value != null && String(value || '').trim()) {
+        const urls = String(value || '')
+          .split(/\r?\n|,/)
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .map((url) => ({ kind: 'url', value: url }));
+        appendImageToVideoInputSequence(!allowsReferenceInputs ? urls.slice(0, 1) : urls, !allowsReferenceInputs ? 'replace-primary' : 'append');
+        refreshImageToVideoInputSummaryFromCurrentSelection();
+        persistUiState();
+      }
+      return;
+    }
+    if (action === 'sequence-clear-all') {
+      setImageToVideoInputSequence([]);
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+      return;
+    }
+    if (key) {
+      if (action === 'sequence-promote') updateImageToVideoInputSequenceItem('promote', key);
+      if (action === 'sequence-move-up') updateImageToVideoInputSequenceItem('move-up', key);
+      if (action === 'sequence-move-down') updateImageToVideoInputSequenceItem('move-down', key);
+      if (action === 'sequence-remove') updateImageToVideoInputSequenceItem('remove', key);
+      if (action === 'sequence-edit-url') updateImageToVideoInputSequenceItem('edit-url', key);
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+    }
+  });
+  els.imageToVideoSequenceWorkspace?.addEventListener('dragstart', (event) => {
+    const card = event.target.closest('[data-sequence-key]');
+    if (!card || !(event.dataTransfer instanceof DataTransfer)) return;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(card.dataset.sequenceKey || ''));
+    card.classList.add('local-image-card-dragging');
+  });
+  els.imageToVideoSequenceWorkspace?.addEventListener('dragover', (event) => {
+    const card = event.target.closest('[data-sequence-key]');
+    if (!card) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    Array.from(els.imageToVideoSequenceWorkspace.querySelectorAll('.local-image-card-drop-target')).forEach((item) => {
+      item.classList.remove('local-image-card-drop-target');
+    });
+    card.classList.add('local-image-card-drop-target');
+  });
+  els.imageToVideoSequenceWorkspace?.addEventListener('dragleave', (event) => {
+    const card = event.target.closest('[data-sequence-key]');
+    if (card) card.classList.remove('local-image-card-drop-target');
+  });
+  els.imageToVideoSequenceWorkspace?.addEventListener('dragend', () => {
+    Array.from(els.imageToVideoSequenceWorkspace.querySelectorAll('.local-image-card-dragging, .local-image-card-drop-target')).forEach((item) => {
+      item.classList.remove('local-image-card-dragging', 'local-image-card-drop-target');
+    });
+  });
+  els.imageToVideoSequenceWorkspace?.addEventListener('drop', (event) => {
+    const card = event.target.closest('[data-sequence-key]');
+    if (!card || !(event.dataTransfer instanceof DataTransfer)) return;
+    event.preventDefault();
+    const dragKey = String(event.dataTransfer.getData('text/plain') || '').trim();
+    const targetKey = String(card.dataset.sequenceKey || '').trim();
+    moveImageToVideoInputSequenceItemBefore(dragKey, targetKey);
+    refreshImageToVideoInputSummaryFromCurrentSelection();
+    persistUiState();
+    Array.from(els.imageToVideoSequenceWorkspace.querySelectorAll('.local-image-card-dragging, .local-image-card-drop-target')).forEach((item) => {
+      item.classList.remove('local-image-card-dragging', 'local-image-card-drop-target');
+    });
+  });
+  els.imageToVideoLocalWorkspace?.addEventListener('click', (event) => {
+    const target = event.target.closest('button');
+    if (!target) return;
+    const action = String(target.dataset.action || '');
+    const id = String(target.dataset.id || '');
+    if (action === 'workspace-upload-source') {
+      els.sourceUploadInput?.click();
+      return;
+    }
+    if (action === 'workspace-upload-reference') {
+      els.referenceUploadInput?.click();
+      return;
+    }
+    if (action === 'workspace-clear-source') {
+      if (els.sourceAssetSelect) els.sourceAssetSelect.value = '';
+      state.imageToVideoSourceAssetId = '';
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+      return;
+    }
+    if (action === 'workspace-clear-reference') {
+      state.imageToVideoReferenceAssetOrder = [];
+      applyImageToVideoAssetStateToForm();
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+      return;
+    }
+    if (action === 'workspace-remove-source' && id) {
+      if (els.sourceAssetSelect?.value === id) els.sourceAssetSelect.value = '';
+      if (state.imageToVideoSourceAssetId === id) state.imageToVideoSourceAssetId = '';
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+      return;
+    }
+    if (action === 'workspace-remove-reference' && id) {
+      state.imageToVideoReferenceAssetOrder = state.imageToVideoReferenceAssetOrder.filter((item) => item !== id);
+      applyImageToVideoAssetStateToForm();
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+      return;
+    }
+    if (action === 'workspace-move-reference-up' && id) {
+      const index = state.imageToVideoReferenceAssetOrder.indexOf(id);
+      if (index > 0) {
+        [state.imageToVideoReferenceAssetOrder[index - 1], state.imageToVideoReferenceAssetOrder[index]] = [state.imageToVideoReferenceAssetOrder[index], state.imageToVideoReferenceAssetOrder[index - 1]];
+      }
+      applyImageToVideoAssetStateToForm();
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+      return;
+    }
+    if (action === 'workspace-move-reference-down' && id) {
+      const index = state.imageToVideoReferenceAssetOrder.indexOf(id);
+      if (index >= 0 && index < state.imageToVideoReferenceAssetOrder.length - 1) {
+        [state.imageToVideoReferenceAssetOrder[index + 1], state.imageToVideoReferenceAssetOrder[index]] = [state.imageToVideoReferenceAssetOrder[index], state.imageToVideoReferenceAssetOrder[index + 1]];
+      }
+      applyImageToVideoAssetStateToForm();
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+      return;
+    }
+    if (action === 'workspace-promote-reference' && id) {
+      const previousSource = String(state.imageToVideoSourceAssetId || '').trim();
+      state.imageToVideoSourceAssetId = id;
+      state.imageToVideoReferenceAssetOrder = state.imageToVideoReferenceAssetOrder.filter((item) => item !== id);
+      if (previousSource && previousSource !== id) {
+        state.imageToVideoReferenceAssetOrder.unshift(previousSource);
+      }
+      applyImageToVideoAssetStateToForm();
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+    }
+  });
+  els.imageToVideoLocalWorkspace?.addEventListener('dragstart', (event) => {
+    const card = event.target.closest('[data-reference-id]');
+    if (!card || !(event.dataTransfer instanceof DataTransfer)) return;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(card.dataset.referenceId || ''));
+    card.classList.add('local-image-card-dragging');
+  });
+  els.imageToVideoLocalWorkspace?.addEventListener('dragover', (event) => {
+    const card = event.target.closest('[data-reference-id]');
+    if (!card) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    Array.from(els.imageToVideoLocalWorkspace.querySelectorAll('.local-image-card-drop-target')).forEach((item) => {
+      item.classList.remove('local-image-card-drop-target');
+    });
+    card.classList.add('local-image-card-drop-target');
+  });
+  els.imageToVideoLocalWorkspace?.addEventListener('dragleave', (event) => {
+    const card = event.target.closest('[data-reference-id]');
+    if (card) card.classList.remove('local-image-card-drop-target');
+  });
+  els.imageToVideoLocalWorkspace?.addEventListener('dragend', () => {
+    Array.from(els.imageToVideoLocalWorkspace.querySelectorAll('.local-image-card-dragging, .local-image-card-drop-target')).forEach((item) => {
+      item.classList.remove('local-image-card-dragging', 'local-image-card-drop-target');
+    });
+  });
+  els.imageToVideoLocalWorkspace?.addEventListener('drop', (event) => {
+    const card = event.target.closest('[data-reference-id]');
+    if (!card || !(event.dataTransfer instanceof DataTransfer)) return;
+    event.preventDefault();
+    const dragId = String(event.dataTransfer.getData('text/plain') || '').trim();
+    const targetId = String(card.dataset.referenceId || '').trim();
+    moveImageToVideoReferenceAssetBefore(dragId, targetId);
+    refreshImageToVideoInputSummaryFromCurrentSelection();
+    persistUiState();
+    Array.from(els.imageToVideoLocalWorkspace.querySelectorAll('.local-image-card-dragging, .local-image-card-drop-target')).forEach((item) => {
+      item.classList.remove('local-image-card-dragging', 'local-image-card-drop-target');
+    });
+  });
+  els.imageToVideoUrlWorkspace?.addEventListener('click', (event) => {
+    const target = event.target.closest('button');
+    if (!target) return;
+    const action = String(target.dataset.action || '');
+    const url = String(target.dataset.url || '').trim();
+    if (action === 'workspace-set-source-url') {
+      const value = window.prompt('输入主图 URL');
+      if (value != null) {
+        state.imageToVideoSourceUrlValue = String(value || '').trim();
+        applyImageToVideoUrlStateToForm();
+        refreshImageToVideoInputSummaryFromCurrentSelection();
+        persistUiState();
+      }
+      return;
+    }
+    if (action === 'workspace-clear-source-url') {
+      state.imageToVideoSourceUrlValue = '';
+      applyImageToVideoUrlStateToForm();
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+      return;
+    }
+    if (action === 'workspace-add-reference-url') {
+      const value = window.prompt('输入附加参考图 URL，可一次输入 1 条');
+      if (value != null && String(value || '').trim()) {
+        appendImageToVideoReferenceUrls([String(value || '').trim()]);
+        refreshImageToVideoInputSummaryFromCurrentSelection();
+        persistUiState();
+      }
+      return;
+    }
+    if (action === 'workspace-clear-reference-url') {
+      state.imageToVideoReferenceUrlOrder = [];
+      applyImageToVideoUrlStateToForm();
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+      return;
+    }
+    if (action === 'workspace-remove-source-url' && url) {
+      if (state.imageToVideoSourceUrlValue === url) state.imageToVideoSourceUrlValue = '';
+      applyImageToVideoUrlStateToForm();
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+      return;
+    }
+    if (action === 'workspace-remove-reference-url' && url) {
+      state.imageToVideoReferenceUrlOrder = state.imageToVideoReferenceUrlOrder.filter((item) => item !== url);
+      applyImageToVideoUrlStateToForm();
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+      return;
+    }
+    if (action === 'workspace-move-reference-url-up' && url) {
+      const index = state.imageToVideoReferenceUrlOrder.indexOf(url);
+      if (index > 0) {
+        [state.imageToVideoReferenceUrlOrder[index - 1], state.imageToVideoReferenceUrlOrder[index]] = [state.imageToVideoReferenceUrlOrder[index], state.imageToVideoReferenceUrlOrder[index - 1]];
+      }
+      applyImageToVideoUrlStateToForm();
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+      return;
+    }
+    if (action === 'workspace-move-reference-url-down' && url) {
+      const index = state.imageToVideoReferenceUrlOrder.indexOf(url);
+      if (index >= 0 && index < state.imageToVideoReferenceUrlOrder.length - 1) {
+        [state.imageToVideoReferenceUrlOrder[index + 1], state.imageToVideoReferenceUrlOrder[index]] = [state.imageToVideoReferenceUrlOrder[index], state.imageToVideoReferenceUrlOrder[index + 1]];
+      }
+      applyImageToVideoUrlStateToForm();
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+      return;
+    }
+    if (action === 'workspace-promote-reference-url' && url) {
+      const previousSource = String(state.imageToVideoSourceUrlValue || '').trim();
+      state.imageToVideoSourceUrlValue = url;
+      state.imageToVideoReferenceUrlOrder = state.imageToVideoReferenceUrlOrder.filter((item) => item !== url);
+      if (previousSource && previousSource !== url) state.imageToVideoReferenceUrlOrder.unshift(previousSource);
+      applyImageToVideoUrlStateToForm();
+      refreshImageToVideoInputSummaryFromCurrentSelection();
+      persistUiState();
+    }
+  });
+  els.imageToVideoUrlWorkspace?.addEventListener('dragstart', (event) => {
+    const card = event.target.closest('[data-reference-url]');
+    if (!card || !(event.dataTransfer instanceof DataTransfer)) return;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(card.dataset.referenceUrl || ''));
+    card.classList.add('local-image-card-dragging');
+  });
+  els.imageToVideoUrlWorkspace?.addEventListener('dragover', (event) => {
+    const card = event.target.closest('[data-reference-url]');
+    if (!card) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    Array.from(els.imageToVideoUrlWorkspace.querySelectorAll('.local-image-card-drop-target')).forEach((item) => {
+      item.classList.remove('local-image-card-drop-target');
+    });
+    card.classList.add('local-image-card-drop-target');
+  });
+  els.imageToVideoUrlWorkspace?.addEventListener('dragleave', (event) => {
+    const card = event.target.closest('[data-reference-url]');
+    if (card) card.classList.remove('local-image-card-drop-target');
+  });
+  els.imageToVideoUrlWorkspace?.addEventListener('dragend', () => {
+    Array.from(els.imageToVideoUrlWorkspace.querySelectorAll('.local-image-card-dragging, .local-image-card-drop-target')).forEach((item) => {
+      item.classList.remove('local-image-card-dragging', 'local-image-card-drop-target');
+    });
+  });
+  els.imageToVideoUrlWorkspace?.addEventListener('drop', (event) => {
+    const card = event.target.closest('[data-reference-url]');
+    if (!card || !(event.dataTransfer instanceof DataTransfer)) return;
+    event.preventDefault();
+    const dragUrl = String(event.dataTransfer.getData('text/plain') || '').trim();
+    const targetUrl = String(card.dataset.referenceUrl || '').trim();
+    moveImageToVideoReferenceUrlBefore(dragUrl, targetUrl);
+    refreshImageToVideoInputSummaryFromCurrentSelection();
+    persistUiState();
+    Array.from(els.imageToVideoUrlWorkspace.querySelectorAll('.local-image-card-dragging, .local-image-card-drop-target')).forEach((item) => {
+      item.classList.remove('local-image-card-dragging', 'local-image-card-drop-target');
+    });
+  });
+
+  function setLabelCaption(label, text) {
+    if (!label) return;
+    const firstTextNode = Array.from(label.childNodes || []).find((node) => node.nodeType === Node.TEXT_NODE);
+    if (firstTextNode) {
+      firstTextNode.nodeValue = `${text}\n`;
+      return;
+    }
+    label.insertBefore(document.createTextNode(`${text}\n`), label.firstChild || null);
+  }
+
+  function applyCompactBridgeCopy(filteredCount = 0) {
+    document.title = 'Bridge Studio';
+    const eyebrow = document.querySelector('.eyebrow');
+    if (eyebrow) eyebrow.textContent = 'Bridge Studio';
+    const heroTitle = document.querySelector('.hero-main h1');
+    if (heroTitle) heroTitle.textContent = 'Bridge Studio';
+    const heroCopy = document.querySelector('.hero-copy');
+    if (heroCopy) heroCopy.textContent = '视频围绕 Sora / Veo，图片围绕 Nano Banana。';
+    const heroNote = document.querySelector('.hero-note');
+    if (heroNote) heroNote.textContent = filteredCount > 0 ? `已隐藏 ${filteredCount} 个非焦点模型。` : '只显示当前可提交能力。';
+    const heroBadge = document.querySelector('.hero-badge');
+    if (heroBadge) heroBadge.textContent = 'Bridge';
+    const heroPills = Array.from(document.querySelectorAll('.hero-pill'));
+    if (heroPills[0]) heroPills[0].textContent = '模型驱动 UI';
+    if (heroPills[1]) heroPills[1].textContent = '任务持久化';
+    if (heroPills[2]) heroPills[2].textContent = '素材复用';
+    const metricLabels = Array.from(document.querySelectorAll('.metric-label'));
+    if (metricLabels[0]) metricLabels[0].textContent = '焦点模型';
+    if (metricLabels[1]) metricLabels[1].textContent = '工作方式';
+    const metricValues = Array.from(document.querySelectorAll('.metric-card strong'));
+    if (metricValues[0]) metricValues[0].textContent = 'Sora / Veo / Nano Banana';
+    if (metricValues[1]) metricValues[1].textContent = '模型驱动 UI';
+    const builderHint = els.createForm?.querySelector('.inline-hint.inline-hint-strong');
+    if (builderHint) builderHint.textContent = '先看模型能力，再提交。';
+    const workflowTitle = els.soraWorkflowPanel?.querySelector('strong');
+    if (workflowTitle) workflowTitle.textContent = '创建';
+    const submitTitle = els.soraSubmitPanel?.querySelector('strong');
+    if (submitTitle) submitTitle.textContent = '提交';
+  }
+
+  function syncCompactResolutionLabels() {
+    const taskType = currentTaskType();
+    const model = currentModel();
+    const caps = getModelCapabilities(model, taskType);
+    const isVideoTask = taskType === 'text_to_video' || taskType === 'image_to_video';
+    const isVeoVideo = isVideoTask && isVeoFamilyModel(model);
+    const tierSizeMode = isTierSizeModel(taskType, model, caps);
+    const usesImageSizeField = String(caps.sizeField || '').trim() === 'image_size';
+    const resolutionPresetWrap = els.resolutionPreset?.closest('label');
+    const resolutionInputWrap = els.resolutionInput?.closest('label');
+
+    setLabelCaption(els.aspectRatioWrap, '画幅比例');
+    setLabelCaption(els.imageSizeWrap, isVeoVideo && (tierSizeMode || usesImageSizeField) ? '分辨率档位' : '尺寸档位');
+    setLabelCaption(resolutionPresetWrap, isVeoVideo ? '分辨率' : '分辨率预设');
+    setLabelCaption(resolutionInputWrap, '自定义分辨率');
+    setLabelCaption(els.durationWrap, '时长（秒）');
+  }
+
+  function compactCapabilityStatusText() {
+    const compressStatus = (value = '', prefix = '') => {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      const normalized = raw.replace(/^模型能力：/, '').replace(/^输入矩阵：/, '').replace(/^能力：/, '').replace(/^输入：/, '');
+      const parts = normalized.split('/').map((part) => String(part || '').trim()).filter(Boolean).slice(0, 4);
+      return parts.length ? `${prefix}${parts.join(' / ')}` : '';
+    };
+    if (els.modelCapabilityHint) {
+      els.modelCapabilityHint.textContent = compressStatus(els.modelCapabilityHint.textContent, '能力：');
+    }
+    if (els.modelRoleHint) {
+      els.modelRoleHint.textContent = compressStatus(els.modelRoleHint.textContent, '输入：');
+    }
+  }
+
+  function applyFocusedVideoModePanel() {
+    const taskType = currentTaskType();
+    const model = currentModel();
+    const caps = getModelCapabilities(model, taskType);
+    const isVeoModel = isVeoFamilyModel(model);
+    const isSoraModel = isSoraFamilyModel(model);
+    const hasStructuredModes = taskType === 'text_to_video' && (caps.supportsStoryboardPrompt || caps.supportsIntelligentStoryboard);
+    const modeWrap = document.querySelector('label[for="videoGenerationMode"]');
+    const kicker = els.storyboardPanel?.querySelector('.storyboard-kicker');
+    const title = els.storyboardPanel?.querySelector('.storyboard-heading h3');
+    const copy = els.storyboardPanel?.querySelector('.storyboard-heading .storyboard-copy');
+    const note = els.storyboardPanel?.querySelector('.storyboard-note');
+    const previewHeadCopy = els.storyboardPanel?.querySelector('.storyboard-preview-head .storyboard-copy');
+
+    if (modeWrap) showElement(modeWrap, hasStructuredModes);
+    if (taskType !== 'text_to_video') return;
+
+    if (kicker) kicker.textContent = isVeoModel ? 'Veo' : (isSoraModel ? 'Sora' : 'Video');
+    if (title) title.textContent = hasStructuredModes ? '分镜模式' : (isVeoModel ? 'Veo 创建' : '视频创建');
+    if (copy) copy.textContent = hasStructuredModes ? '只显示当前模型支持的模式。' : (isVeoModel ? '以 Prompt、比例和分辨率为主。' : '按当前模型能力创建。');
+    if (note) note.textContent = hasStructuredModes ? '这里只处理结构化分镜。' : '当前模型没有额外分镜模式。';
+    if (previewHeadCopy) previewHeadCopy.textContent = hasStructuredModes ? '右侧是最终提交结构。' : '';
+    if (els.videoModeHint && !hasStructuredModes) {
+      els.videoModeHint.textContent = isVeoModel ? 'Veo 当前走标准视频模式。' : '当前走标准视频模式。';
+    }
+  }
+
+  function applyFocusedPromptPlaceholder() {
+    if (!els.prompt) return;
+    const taskType = currentTaskType();
+    const model = currentModel();
+    const isVeoModel = isVeoFamilyModel(model);
+    const isSoraModel = isSoraFamilyModel(model);
+    if (taskType === 'text_to_video') {
+      els.prompt.placeholder = isVeoModel
+        ? '写清主体、动作、镜头和节奏'
+        : (isSoraModel ? '写清主体、动作、镜头和时序' : '描述你想生成的视频');
+      return;
+    }
+    if (taskType === 'image_to_video') {
+      els.prompt.placeholder = isVeoModel
+        ? '补充首帧如何动、镜头如何走、结尾如何停'
+        : '描述首帧之后的动作、镜头和节奏';
+      return;
+    }
+    if (taskType === 'text_to_image') {
+      els.prompt.placeholder = '描述你想生成的图片';
+      return;
+    }
+    if (taskType === 'image_edit') {
+      els.prompt.placeholder = '描述你想如何修改原图';
+    }
+  }
+
+  function applyFocusedImageToVideoPanel() {
+    const taskType = currentTaskType();
+    if (taskType !== 'image_to_video') return;
+    const model = currentModel();
+    const caps = getModelCapabilities(model, taskType);
+    const family = getBridgeVideoModelFamilyLabel(model);
+    const inputCards = Array.from(els.imageToVideoInputPanel?.querySelectorAll('.image-input-card') || []);
+    if (inputCards[0]) {
+      const title = inputCards[0].querySelector('strong');
+      const copy = inputCards[0].querySelector('p');
+      if (title) title.textContent = '第 1 张 / 首帧';
+      if (copy) copy.textContent = caps.supportsImageToVideoEndFrame
+        ? `${family} 会把它当作起始画面，可再补尾帧。`
+        : `${family} 会把它当作起始画面。`;
+    }
+    if (inputCards[1]) {
+      const title = inputCards[1].querySelector('strong');
+      const copy = inputCards[1].querySelector('p');
+      if (title) title.textContent = '参考图';
+      if (copy) {
+        copy.textContent = caps.supportsImageToVideoReferenceImages
+          ? `其余图片只作约束，${formatReferenceLimit(caps, { singular: '仅 1 张', pluralPrefix: '最多 ' })}。`
+          : '当前模型不提交参考图。';
+      }
+    }
+
+    const sequenceHeadCopy = els.imageToVideoSequenceWorkspace?.querySelector('.image-sequence-head span');
+    if (sequenceHeadCopy) {
+      sequenceHeadCopy.textContent = caps.supportsImageToVideoReferenceImages
+        ? '第 1 张定开始，后续按顺序作参考。'
+        : '只保留第 1 张作为起始画面。';
+    }
+
+    const localHeads = Array.from(els.imageToVideoLocalWorkspace?.querySelectorAll('.local-image-lane-head span') || []);
+    if (localHeads[0]) localHeads[0].textContent = '这里只保留 1 张。';
+    if (localHeads[1]) {
+      localHeads[1].textContent = caps.supportsImageToVideoReferenceImages
+        ? '支持多张、排序、设为第 1 张。'
+        : '当前模型不提交本地参考图。';
+    }
+
+    const urlHeads = Array.from(els.imageToVideoUrlWorkspace?.querySelectorAll('.local-image-lane-head span') || []);
+    if (urlHeads[0]) urlHeads[0].textContent = '也可以直接用 URL 作为第 1 张。';
+    if (urlHeads[1]) {
+      urlHeads[1].textContent = caps.supportsImageToVideoReferenceImages
+        ? 'URL 参考图也按当前顺序提交。'
+        : '当前模型不提交 URL 参考图。';
+    }
+  }
+
+  buildInputRoleSummary = function buildInputRoleSummary(taskType, caps, generationMode) {
+    const tags = [];
+    if (taskType === 'image_to_video') {
+      if (caps.supportsImageToVideoFirstFrame) tags.push('首帧');
+      if (caps.supportsImageToVideoReferenceImages) tags.push(caps.supportsMultipleReferenceImages ? formatReferenceLimit(caps, { singular: '参考图 1 张', pluralPrefix: '参考图最多 ' }) : '参考图');
+      if (caps.supportsImageToVideoEndFrame) tags.push('尾帧');
+    } else if (taskType === 'text_to_video') {
+      tags.push('Prompt');
+      if (caps.supportsTextToVideoReferenceImages) tags.push(caps.supportsMultipleReferenceImages ? formatReferenceLimit(caps, { singular: '参考图 1 张', pluralPrefix: '参考图最多 ' }) : '参考图');
+      if (generationMode === 'storyboard') tags.push('Storyboard');
+    } else if (taskType === 'image_edit') {
+      tags.push('原图');
+      if (caps.supportsReferenceImage) tags.push('参考图');
+    } else if (taskType === 'text_to_image') {
+      tags.push('Prompt');
+      if (caps.supportsTextToImageReferenceImages) tags.push(caps.supportsMultipleReferenceImages ? formatReferenceLimit(caps, { singular: '参考图 1 张', pluralPrefix: '参考图最多 ' }) : '参考图');
+    }
+    return tags.length ? `输入：${tags.join(' / ')}` : '';
+  };
+
+  buildTaskTypeGuide = function buildTaskTypeGuide(taskType, caps, generationMode) {
+    const isVeoModel = isVeoTaskModel(currentModel());
+    if (taskType === 'text_to_video') {
+      if (generationMode === 'storyboard') return 'Storyboard 模式，只提交分镜文本。';
+      if (generationMode === 'intelligent') return '智能分镜模式，主输入是 Prompt。';
+      if (isVeoModel) return caps.supportsTextToVideoReferenceImages ? 'Veo 文生视频，参考图不是首帧。' : 'Veo 文生视频，以 Prompt 为主。';
+      return caps.supportsTextToVideoReferenceImages ? '文生视频，参考图不是首帧。' : '文生视频，以 Prompt 为主。';
+    }
+    if (taskType === 'image_to_video') {
+      return caps.supportsImageToVideoEndFrame ? '图生视频，第 1 张是首帧，可选尾帧。' : '图生视频，第 1 张是首帧。';
+    }
+    if (taskType === 'image_edit') return '图片编辑，原图必需。';
+    if (taskType === 'text_to_image') return caps.supportsTextToImageReferenceImages ? '文生图，可加参考图。' : '文生图，以 Prompt 为主。';
+    return '';
+  };
+
+  applyFocusedBridgeBranding = function applyFocusedBridgeBranding(filteredCount = 0) {
+    applyCompactBridgeCopy(filteredCount);
+    const providerType = document.getElementById('providerType');
+    if (providerType?.value === 'compatible') {
+      const providerLabel = document.getElementById('providerLabel');
+      if (providerLabel && !String(providerLabel.value || '').trim()) providerLabel.value = 'BLTCY';
+    }
+  };
+
+  const originalSyncResolutionOptions = syncResolutionOptions;
+  syncResolutionOptions = function syncResolutionOptions() {
+    originalSyncResolutionOptions.apply(this, arguments);
+    syncCompactResolutionLabels();
+  };
+
+  const originalApplyCreateFormRulesV2 = applyCreateFormRulesV2;
+  applyCreateFormRulesV2 = function applyCreateFormRulesV2() {
+    const result = originalApplyCreateFormRulesV2.apply(this, arguments);
+    applyCompactBridgeCopy();
+    syncCompactResolutionLabels();
+    compactCapabilityStatusText();
+    applyFocusedVideoModePanel();
+    applyFocusedPromptPlaceholder();
+    applyFocusedImageToVideoPanel();
+    return result;
+  };
+
+  applyCompactBridgeCopy();
+  syncCompactResolutionLabels();
+  compactCapabilityStatusText();
+  applyFocusedVideoModePanel();
+  applyFocusedPromptPlaceholder();
+  applyFocusedImageToVideoPanel();
+  els.soraWorkflowPanel?.addEventListener('click', (event) => {
+    const target = event.target.closest('button');
+    if (!target) return;
+    const action = String(target.dataset.action || '');
+    if (action === 'workflow-task-text-image' && els.typeSelect) {
+      els.typeSelect.value = 'text_to_image';
+      applyCreateFormRulesV2();
+      persistUiState();
+      return;
+    }
+    if (action === 'workflow-task-image-edit' && els.typeSelect) {
+      els.typeSelect.value = 'image_edit';
+      applyCreateFormRulesV2();
+      persistUiState();
+      return;
+    }
+    if (action === 'workflow-task-text-video' && els.typeSelect) {
+      els.typeSelect.value = 'text_to_video';
+      applyCreateFormRulesV2();
+      persistUiState();
+      return;
+    }
+    if (action === 'workflow-task-image-video' && els.typeSelect) {
+      els.typeSelect.value = 'image_to_video';
+      applyCreateFormRulesV2();
+      persistUiState();
+      return;
+    }
+    if (action === 'workflow-mode-standard' && els.videoGenerationMode) {
+      els.videoGenerationMode.value = 'standard';
+      applyCreateFormRulesV2();
+      persistUiState();
+      return;
+    }
+    if (action === 'workflow-mode-storyboard' && els.videoGenerationMode) {
+      els.typeSelect.value = 'text_to_video';
+      applyCreateFormRulesV2();
+      els.videoGenerationMode.value = Array.from(els.videoGenerationMode.options || []).some((item) => item.value === 'storyboard')
+        ? 'storyboard'
+        : 'standard';
+      applyCreateFormRulesV2();
+      if (els.videoGenerationMode.value === 'storyboard' && !String(els.storyboardText?.value || '').trim()) {
+        renderStoryboardEditor(defaultStoryboardShots());
+      }
+      persistUiState();
+      return;
+    }
+    if (action === 'workflow-seed-prompt' && els.prompt) {
+        els.prompt.value = bridgePromptSeed(currentTaskType());
+      persistUiState();
+      return;
+    }
+    if (action === 'workflow-optimize-prompt') {
+      if (els.optimizePromptWithModel && !els.optimizePromptWithModel.disabled && !els.optimizePromptWithModel.closest('.hidden')) {
+        els.optimizePromptWithModel.click();
+      }
+      return;
+    }
+    if (action === 'workflow-seed-storyboard') {
+      els.typeSelect.value = 'text_to_video';
+      applyCreateFormRulesV2();
+      els.videoGenerationMode.value = Array.from(els.videoGenerationMode.options || []).some((item) => item.value === 'storyboard')
+        ? 'storyboard'
+        : 'standard';
+      applyCreateFormRulesV2();
+      renderStoryboardEditor(defaultStoryboardShots());
+      persistUiState();
+    }
   });
 
   els.autoRefreshToggle.addEventListener('change', () => {
@@ -3868,6 +7261,8 @@ function bindEvents() {
 }
 
 async function init() {
+  initRevealAnimations();
+  ensureVisualInputEnhancements();
   bindEvents();
   try {
     await loadMeta();
@@ -3880,6 +7275,7 @@ async function init() {
     restoreUiPreferences();
     await Promise.all([loadAssets(), loadTasks(true)]);
     restoreCreateDraft();
+    ensureImageToVideoSequenceState();
     applyCreateFormRulesV2();
     setStatus('初始化完成，可开始配置和创建任务。');
   } catch (error) {

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:gpt-best.apifox.cn)",
+      "Bash(curl -x http://127.0.0.1:7897 -s \"https://gpt-best.apifox.cn/doc-3530850\")",
+      "Bash(cd:*)"
+    ]
+  }
+}

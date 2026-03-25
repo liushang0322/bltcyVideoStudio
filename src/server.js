@@ -67,7 +67,7 @@ const MODEL_LIST_CACHE_FILE = join(MODEL_CACHE_DIR, 'runtime-models.json');
 const ENTRY_FILE = fileURLToPath(import.meta.url);
 const WORKSPACE_ROOT = resolve(process.cwd());
 const STORAGE_ROOT = resolve(process.cwd(), '.sora2studio');
-const DEFAULT_DOWNLOAD_HOST_ALLOWLIST = ['api.bltcy.ai', 'cdn.bltcy.ai', 'files.bltcy.ai'];
+const DEFAULT_DOWNLOAD_HOST_ALLOWLIST = ['api.bltcy.ai', 'cdn.bltcy.ai', 'files.bltcy.ai', 'oss.filenest.top', 'filenest.top', 'midjourney-plus.oss-us-west-1.aliyuncs.com'];
 const modelSyncState = {
   running: false,
   startedAt: 0,
@@ -753,12 +753,16 @@ function hasInputValue(value) {
   return value !== undefined && value !== null && String(value).trim() !== '';
 }
 
-function hasDurationCapability(caps) {
-  return Boolean(
-    caps?.supportsDuration
-    || (Array.isArray(caps?.durationOptions) && caps.durationOptions.length > 0)
+function hasDurationCapability(caps, modelId = '') {
+  const loweredId = String(modelId || '').trim().toLowerCase();
+  const explicitDurationCapability = Boolean(
+    (Array.isArray(caps?.durationOptions) && caps.durationOptions.length > 0)
     || Number.isFinite(Number(caps?.minDuration))
     || Number.isFinite(Number(caps?.maxDuration))
+  );
+  return Boolean(
+    explicitDurationCapability
+    || (!/^veo/.test(loweredId) && caps?.supportsDuration)
   );
 }
 
@@ -796,6 +800,298 @@ function resolutionMatchesAspectRatio(resolution, aspectRatio) {
     default:
       return true;
   }
+}
+
+function toEnumOptions(values = []) {
+  return Array.from(new Set((Array.isArray(values) ? values : []).map((item) => String(item || '').trim()).filter(Boolean)))
+    .map((value) => ({ value, label: value }));
+}
+
+function buildCapabilityFields(taskType, caps = {}) {
+  const fields = [];
+  const pushField = (field) => fields.push(field);
+  const kind = TASK_TYPE_DEFINITIONS.find((item) => item.value === taskType)?.kind || '';
+  const isImageTask = kind === 'image';
+  const isVideoTask = kind === 'video';
+  const isImageToVideo = taskType === 'image_to_video';
+  const isTextToVideo = taskType === 'text_to_video';
+  const isImageEdit = taskType === 'image_edit';
+
+  pushField({
+    name: 'prompt',
+    type: 'string',
+    label: '提示词',
+    required: taskType !== 'image_to_video',
+    maxLength: caps.promptMaxLength || 4000,
+    category: 'basic',
+    visible: taskType !== 'image_to_video' || true
+  });
+
+  if (isVideoTask && caps.supportsStructuredVideoMode) {
+    pushField({
+      name: 'videoGenerationMode',
+      type: 'enum',
+      label: '生成模式',
+      required: false,
+      options: [
+        { value: 'standard', label: '标准模式' },
+        ...(caps.supportsStoryboardPrompt ? [{ value: 'storyboard', label: '故事板模式' }] : []),
+        ...(caps.supportsIntelligentStoryboard ? [{ value: 'intelligent', label: '智能分镜模式' }] : [])
+      ],
+      default: 'standard',
+      category: 'basic',
+      visible: true
+    });
+  }
+
+  if (isTextToVideo && caps.supportsStoryboardPrompt) {
+    pushField({
+      name: 'storyboardText',
+      type: 'text',
+      label: '故事板',
+      required: false,
+      category: 'advanced',
+      visible: true
+    });
+  }
+
+  if (isImageEdit || isImageToVideo || caps.supportsSourceImage) {
+    pushField({
+      name: 'sourceImage',
+      type: 'image',
+      label: isImageToVideo ? '第 1 张输入图' : '源图',
+      required: isImageEdit,
+      category: 'basic',
+      visible: true
+    });
+  }
+
+  if (caps.supportsReferenceImage) {
+    pushField({
+      name: 'referenceImages',
+      type: caps.supportsMultipleReferenceImages ? 'image_list' : 'image',
+      label: isImageToVideo ? '附加参考图' : '参考图',
+      required: false,
+      maxItems: caps.maxReferenceImages || (caps.supportsMultipleReferenceImages ? null : 1),
+      category: 'basic',
+      visible: true
+    });
+  }
+
+  if (caps.supportsImageToVideoEndFrame || caps.supportsEndFrame) {
+    pushField({
+      name: 'endFrameImage',
+      type: 'image',
+      label: '尾帧',
+      required: false,
+      category: 'advanced',
+      visible: true
+    });
+  }
+
+  if (caps.supportsAspectRatio && caps.aspectRatioOptions?.length) {
+    pushField({
+      name: 'aspectRatio',
+      type: 'enum',
+      label: '画幅比例',
+      required: false,
+      options: toEnumOptions(caps.aspectRatioOptions),
+      default: caps.defaultAspectRatio || '',
+      category: 'basic',
+      visible: true
+    });
+  }
+
+  if (hasImageSizeCapability(caps)) {
+    pushField({
+      name: 'imageSize',
+      type: 'enum',
+      label: '尺寸档位',
+      required: false,
+      options: toEnumOptions(caps.imageSizeOptions),
+      default: caps.defaultImageSize || '',
+      category: 'basic',
+      visible: true
+    });
+  }
+
+  if (hasResolutionCapability(caps)) {
+    pushField({
+      name: 'resolution',
+      type: 'enum',
+      label: '分辨率',
+      required: false,
+      options: toEnumOptions(caps.resolutionPresets),
+      default: caps.defaultResolution || '',
+      category: 'advanced',
+      visible: true
+    });
+  }
+
+  if (hasDurationCapability(caps, modelId)) {
+    pushField({
+      name: 'duration',
+      type: caps.durationOptions?.length ? 'enum' : 'integer',
+      label: '时长',
+      required: false,
+      options: toEnumOptions(caps.durationOptions),
+      min: caps.minDuration ?? undefined,
+      max: caps.maxDuration ?? undefined,
+      category: 'basic',
+      visible: isVideoTask
+    });
+  }
+
+  if (isImageTask && caps.supportsImageCount) {
+    pushField({
+      name: 'imageCount',
+      type: 'integer',
+      label: '生成张数',
+      required: false,
+      min: 1,
+      max: caps.maxImageCount || 8,
+      default: 1,
+      category: 'basic',
+      visible: true
+    });
+  }
+
+  if (isImageTask && Array.isArray(caps.qualityOptions) && caps.qualityOptions.length) {
+    pushField({
+      name: 'imageQuality',
+      type: 'enum',
+      label: '质量',
+      required: false,
+      options: toEnumOptions(caps.qualityOptions),
+      category: 'advanced',
+      visible: true
+    });
+  }
+
+  if (caps.supportsNegativePrompt) {
+    pushField({
+      name: 'negativePrompt',
+      type: 'string',
+      label: '反向提示词',
+      required: false,
+      category: 'advanced',
+      visible: true
+    });
+  }
+
+  if (caps.supportsProviderMode && Array.isArray(caps.providerModeOptions) && caps.providerModeOptions.length) {
+    pushField({
+      name: 'providerMode',
+      type: 'enum',
+      label: caps.providerModeLabel || '生成模式',
+      required: false,
+      options: toEnumOptions(caps.providerModeOptions),
+      category: 'advanced',
+      visible: true
+    });
+  }
+
+  if (caps.supportsCfgScale) {
+    pushField({
+      name: 'cfgScale',
+      type: 'number',
+      label: 'CFG Scale',
+      required: false,
+      category: 'expert',
+      visible: true
+    });
+  }
+
+  if (caps.supportsDirectionalCameraControls) {
+    pushField({
+      name: 'cameraControl',
+      type: 'group',
+      label: '镜头控制',
+      required: false,
+      category: 'advanced',
+      visible: true
+    });
+  }
+
+  if (caps.supportsOmniInputs) {
+    pushField({
+      name: 'omniInputs',
+      type: 'group',
+      label: 'Omni / Elements 输入',
+      required: false,
+      category: 'advanced',
+      visible: true
+    });
+  }
+
+  pushField({
+    name: 'seed',
+    type: 'integer',
+    label: 'Seed',
+    required: false,
+    min: 0,
+    max: 2147483647,
+    category: 'expert',
+    visible: true
+  });
+
+  if (isImageTask || isImageToVideo) {
+    pushField({
+      name: 'styleStrength',
+      type: 'number',
+      label: '参考强度',
+      required: false,
+      min: 0,
+      max: 1,
+      category: 'expert',
+      visible: true
+    });
+  }
+
+  return fields;
+}
+
+async function buildModelCapabilitiesPayload() {
+  const models = await listModels(undefined, { includeCatalog: true, refreshCatalog: false });
+  const sanitized = sanitizeModelListResponse(models);
+  const data = sanitized.data.filter((model) => isStudioModelAllowed(model));
+  const modelPayload = {};
+
+  for (const model of data) {
+    const supportedTaskTypes = getCatalogSupportedTasks(model).filter((taskType) => STUDIO_SUPPORTED_TASKS.has(taskType));
+    const capabilities = {};
+    for (const taskType of supportedTaskTypes) {
+      const taskCaps = deriveTaskRoleCapabilities(
+        taskType,
+        applyProviderCapabilityPolicy(
+          model.id,
+          taskType,
+          pickCatalogCaps(model.catalog?.taskCapabilities?.[taskType] || model.catalog?.capabilities || {})
+        )
+      );
+      capabilities[taskType] = {
+        fields: buildCapabilityFields(taskType, taskCaps),
+        constraints: taskCaps
+      };
+    }
+    modelPayload[model.id] = {
+      id: model.id,
+      provider: model.provider || '',
+      taskTypes: supportedTaskTypes,
+      capabilities
+    };
+  }
+
+  return {
+    taskTypes: TASK_TYPE_DEFINITIONS
+      .map((task) => ({
+        value: task.value,
+        label: task.label,
+        models: Object.values(modelPayload).filter((model) => model.taskTypes.includes(task.value)).map((model) => model.id)
+      })),
+    models: modelPayload,
+    generatedAt: new Date().toISOString()
+  };
 }
 
 async function resolveTaskCapabilities(modelId, taskType) {
@@ -855,7 +1151,8 @@ async function validateInput(input) {
     if (!hasSourceImage && !hasReferenceImage) {
       return 'image_to_video requires an input image; end frame image is optional';
     }
-    if (hasSourceImage && taskCaps.supportsSourceImage !== true) {
+    const supportsImageToVideoSourceImage = taskCaps.supportsImageToVideoFirstFrame === true || taskCaps.supportsSourceImage === true;
+    if (hasSourceImage && !supportsImageToVideoSourceImage) {
       return `model ${input.model} does not support source_image`;
     }
   }
@@ -906,7 +1203,7 @@ async function validateInput(input) {
       return `model ${input.model} does not support end_frame_image`;
     }
     if (input.duration !== undefined && input.duration !== null && input.duration !== '') {
-      if (!hasDurationCapability(taskCaps)) return `model ${input.model} does not support duration`;
+      if (!hasDurationCapability(taskCaps, input.model)) return `model ${input.model} does not support duration`;
       const duration = Number(input.duration);
       if (!Number.isFinite(duration) || duration <= 0) return 'duration must be a positive number';
 
@@ -1337,10 +1634,11 @@ async function buildTaskPayload(input) {
   const supportsResolution = hasResolutionCapability(taskCaps);
   const supportsImageSize = hasImageSizeCapability(taskCaps);
   const supportsAspectRatio = taskCaps.supportsAspectRatio === true;
-  const supportsDuration = hasDurationCapability(taskCaps);
+  const supportsDuration = hasDurationCapability(taskCaps, input.model);
   const supportsNegativePrompt = taskCaps.supportsNegativePrompt === true;
   const supportsSourceImage = taskCaps.supportsImageEditSourceImage === true || taskCaps.supportsImageToVideoFirstFrame === true || taskCaps.supportsSourceImage === true;
   const supportsReferenceImage = taskCaps.supportsImageToVideoReferenceImages === true || taskCaps.supportsTextToImageReferenceImages === true || taskCaps.supportsTextToVideoReferenceImages === true || taskCaps.supportsReferenceImage === true;
+  const supportsMultipleReferenceImages = taskCaps.supportsMultipleReferenceImages === true;
   const supportsEndFrame = taskCaps.supportsImageToVideoEndFrame === true;
   const primaryReferenceImageUrl = String(input.referenceImageUrl || '').trim() || (Array.isArray(input.referenceImageUrls) ? String(input.referenceImageUrls[0] || '').trim() : '');
   const primaryReferenceImageDataUrl = referenceImageDataUrl || referenceImageDataUrls[0] || '';
@@ -1351,8 +1649,8 @@ async function buildTaskPayload(input) {
   const resolvedSourceImageDataUrl = isImageToVideo && supportsSourceImage ? primaryImageDataUrl : sourceImageDataUrl;
   const resolvedReferenceImageUrl = isImageToVideo && !supportsSourceImage && supportsReferenceImage ? primaryImageUrl : input.referenceImageUrl;
   const resolvedReferenceImageDataUrl = isImageToVideo && !supportsSourceImage && supportsReferenceImage ? primaryImageDataUrl : referenceImageDataUrl;
-  const resolvedReferenceImageUrls = isImageToVideo ? undefined : input.referenceImageUrls;
-  const resolvedReferenceImageDataUrls = isImageToVideo ? undefined : referenceImageDataUrls;
+  const resolvedReferenceImageUrls = supportsMultipleReferenceImages ? input.referenceImageUrls : undefined;
+  const resolvedReferenceImageDataUrls = supportsMultipleReferenceImages ? referenceImageDataUrls : undefined;
 
   return {
     type: input.type,
@@ -1640,6 +1938,14 @@ const server = http.createServer(async (req, res) => {
         });
       }
       return json(res, 200, sanitized);
+    } catch (error) {
+      return json(res, 502, mapError(error));
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/models/capabilities') {
+    try {
+      return json(res, 200, await buildModelCapabilitiesPayload());
     } catch (error) {
       return json(res, 502, mapError(error));
     }

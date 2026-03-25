@@ -90,6 +90,50 @@ function normalizeKlingFileValue(value) {
   return match ? match[2] : normalized;
 }
 
+function resolutionMatchesAspectRatio(resolution, aspectRatio) {
+  const match = String(resolution || '').trim().match(/^(\d{3,5})x(\d{3,5})$/i);
+  if (!match) return true;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!width || !height) return true;
+  switch (String(aspectRatio || '').trim()) {
+    case '16:9':
+      return width >= height;
+    case '9:16':
+      return height >= width;
+    case '1:1':
+      return width === height;
+    default:
+      return true;
+  }
+}
+
+function flipResolutionIfNeeded(resolution, aspectRatio) {
+  const normalized = String(resolution || '').trim();
+  const match = normalized.match(/^(\d{3,5})x(\d{3,5})$/i);
+  if (!match) return normalized;
+  const swapped = `${match[2]}x${match[1]}`;
+  return resolutionMatchesAspectRatio(swapped, aspectRatio) ? swapped : normalized;
+}
+
+function pickResolutionForAspectRatio(explicitResolution, aspectRatio, supportedValues = [], defaultResolution = '') {
+  const requestedResolution = String(explicitResolution || '').trim();
+  const requestedAspectRatio = String(aspectRatio || '').trim();
+  const fallbackResolution = String(defaultResolution || '').trim();
+  const candidates = Array.isArray(supportedValues)
+    ? supportedValues.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+
+  if (requestedResolution) return requestedResolution;
+  if (!requestedAspectRatio) return fallbackResolution || candidates[0] || '';
+
+  const matchingCandidate = candidates.find((value) => resolutionMatchesAspectRatio(value, requestedAspectRatio));
+  if (matchingCandidate) return matchingCandidate;
+  if (fallbackResolution && resolutionMatchesAspectRatio(fallbackResolution, requestedAspectRatio)) return fallbackResolution;
+  if (fallbackResolution) return flipResolutionIfNeeded(fallbackResolution, requestedAspectRatio);
+  return '';
+}
+
 function resolveKlingModelName(modelId) {
   const normalized = String(modelId || '').trim();
   if (!normalized) return normalized;
@@ -254,7 +298,20 @@ function ensureFeatureEnabled(featureKey, label, path) {
   }
 }
 
-async function withProxyEnv(fn) {
+function shouldBypassProxyForUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const hostname = String(parsed.hostname || '').trim().toLowerCase();
+    return hostname === 'localhost'
+      || hostname === '127.0.0.1'
+      || hostname === '::1'
+      || hostname.endsWith('.local');
+  } catch {
+    return false;
+  }
+}
+
+async function withProxyEnv(fn, url = '') {
   const previous = {
     HTTP_PROXY: process.env.HTTP_PROXY,
     HTTPS_PROXY: process.env.HTTPS_PROXY,
@@ -263,21 +320,22 @@ async function withProxyEnv(fn) {
     NO_PROXY: process.env.NO_PROXY,
     no_proxy: process.env.no_proxy
   };
+  const bypassProxy = shouldBypassProxyForUrl(url);
 
-  if (runtimeConfig.proxyUrl) {
+  if (runtimeConfig.proxyUrl && !bypassProxy) {
     process.env.HTTP_PROXY = runtimeConfig.proxyUrl;
     process.env.HTTPS_PROXY = runtimeConfig.proxyUrl;
     process.env.http_proxy = runtimeConfig.proxyUrl;
     process.env.https_proxy = runtimeConfig.proxyUrl;
-    delete process.env.NO_PROXY;
-    delete process.env.no_proxy;
+    process.env.NO_PROXY = 'localhost,127.0.0.1,::1';
+    process.env.no_proxy = 'localhost,127.0.0.1,::1';
   } else {
     delete process.env.HTTP_PROXY;
     delete process.env.HTTPS_PROXY;
     delete process.env.http_proxy;
     delete process.env.https_proxy;
-    process.env.NO_PROXY = '*';
-    process.env.no_proxy = '*';
+    process.env.NO_PROXY = bypassProxy ? '*' : 'localhost,127.0.0.1,::1';
+    process.env.no_proxy = process.env.NO_PROXY;
   }
 
   try {
@@ -291,8 +349,13 @@ async function withProxyEnv(fn) {
 }
 
 function makeNetworkError(url, reason) {
-  const suffix = runtimeConfig.proxyUrl ? `, via proxy ${runtimeConfig.proxyUrl}` : ', direct mode';
-  const error = new Error(`Network request failed: ${url}${suffix}. ${reason || 'Unknown network error'}`);
+  const suffix = runtimeConfig.proxyUrl && !shouldBypassProxyForUrl(url)
+    ? `, via proxy ${runtimeConfig.proxyUrl}`
+    : ', direct mode';
+  const localhostHint = shouldBypassProxyForUrl(url)
+    ? ' Local upstream appears unavailable; if you intended to use a local mock/provider, start it first.'
+    : '';
+  const error = new Error(`Network request failed: ${url}${suffix}. ${reason || 'Unknown network error'}${localhostHint}`);
   error.code = 'UPSTREAM_NETWORK_UNREACHABLE';
   error.statusCode = 502;
   return error;
@@ -410,7 +473,7 @@ async function apiRequest(path, { method = 'GET', body, maxTime = 20 } = {}) {
       },
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal
-    }));
+    }), url);
 
     const data = await parseJsonResponse(response);
     if (!response.ok) throw makeHttpError(response.status, data);
@@ -479,7 +542,7 @@ async function multipartRequest(path, fields, { maxTime = 60 } = {}) {
       },
       body: form,
       signal: controller.signal
-    }));
+    }), url);
 
     const data = await parseJsonResponse(response);
     if (!response.ok) throw makeHttpError(response.status, data);
@@ -768,6 +831,7 @@ export async function createVideoTask(payload) {
   const sizeField = String(taskCapability.sizeField || 'size');
   const resolutionValue = String(payload.size || payload.resolution || '').trim();
   const imageSizeValue = String(payload.image_size || '').trim();
+  const aspectRatioValue = String(payload.aspect_ratio || payload.aspectRatio || '').trim();
 
   const buildInputReference = (sourceImage, referenceImages, format) => {
     const items = []
@@ -800,18 +864,21 @@ export async function createVideoTask(payload) {
   const hasImageSizeCapability = supportedImageSizeValues.length > 0 || defaultImageSizeValue;
   const hasExplicitSizeCapability = Boolean(hasResolutionCapability || hasImageSizeCapability);
   const normalizedImageSizeValue = imageSizeValue || (/^\dK$/i.test(resolutionValue) ? resolutionValue.toUpperCase() : '');
+  const effectiveResolutionValue = sizeField === 'image_size'
+    ? resolutionValue
+    : pickResolutionForAspectRatio(resolutionValue, aspectRatioValue, supportedResolutionValues, defaultResolutionValue);
 
   if (hasExplicitSizeCapability && sizeField === 'image_size') {
     if (normalizedImageSizeValue) body.image_size = normalizedImageSizeValue;
     else if (defaultImageSizeValue) body.image_size = defaultImageSizeValue;
   } else if (hasExplicitSizeCapability) {
-    if (resolutionValue) body.size = resolutionValue;
+    if (effectiveResolutionValue) body.size = effectiveResolutionValue;
     else if (defaultResolutionValue) body.size = defaultResolutionValue;
   }
 
   if (!body.size && !body.image_size) {
     if (hasImageSizeCapability && defaultImageSizeValue) body.image_size = defaultImageSizeValue;
-    else if (hasResolutionCapability && defaultResolutionValue) body.size = defaultResolutionValue;
+    else if (hasResolutionCapability && (effectiveResolutionValue || defaultResolutionValue)) body.size = effectiveResolutionValue || defaultResolutionValue;
   }
 
   if (payload.aspect_ratio && taskCapability.supportsAspectRatio !== false) body.aspect_ratio = payload.aspect_ratio;
@@ -837,6 +904,10 @@ export async function createVideoTask(payload) {
     .filter(Boolean);
   const endFrameImage = payload.end_frame_image_data_url || payload.end_frame_image_url;
   const primaryImage = sourceImage || referenceImages[0] || '';
+  const allInputImages = []
+    .concat(sourceImage ? [sourceImage] : [])
+    .concat(referenceImages)
+    .filter(Boolean);
   const shouldUseImagesArray = payload.type === 'image_to_video' && Boolean(primaryImage);
   const modelRequestFormat = taskCapability.requestFormat || catalogEntry?.capabilities?.requestFormat || '';
   const modelInputReferenceFormat = taskCapability.inputReferenceFormat || catalogEntry?.capabilities?.inputReferenceFormat || '';
@@ -846,7 +917,7 @@ export async function createVideoTask(payload) {
   const alternateInputReferenceFormat = initialInputReferenceFormat === 'string' ? 'object' : 'string';
   const initialInputReference = buildInputReference(sourceImage, referenceImages, initialInputReferenceFormat);
   if (shouldUseImagesArray) {
-    body.images = [primaryImage];
+    body.images = allInputImages.length ? allInputImages : [primaryImage];
     if (taskCapability.supportsEndFrame === true && endFrameImage) {
       body.images.push(endFrameImage);
     }
@@ -1000,6 +1071,7 @@ export async function createImage(payload) {
   const sizeField = String(taskCapability.sizeField || 'size');
   const resolutionValue = String(payload.size || payload.resolution || '').trim();
   const imageSizeValue = String(payload.image_size || payload.imageSize || '').trim();
+  const aspectRatioValue = String(payload.aspect_ratio || payload.aspectRatio || '').trim();
 
   const buildInputReference = (referenceImages, format) => {
     const items = (Array.isArray(referenceImages) ? referenceImages : []).filter(Boolean);
@@ -1014,11 +1086,14 @@ export async function createImage(payload) {
     model: payload.model,
     prompt: payload.prompt || ''
   };
+  const effectiveResolutionValue = sizeField === 'image_size'
+    ? resolutionValue
+    : pickResolutionForAspectRatio(resolutionValue, aspectRatioValue, [], DEFAULT_GENERATION_PARAMS.imageSize);
   if (sizeField === 'image_size') {
     body.image_size = imageSizeValue || (/^\dK$/i.test(resolutionValue) ? resolutionValue.toUpperCase() : '') || '1K';
     if (taskCapability.allowCustomResolution !== false && resolutionValue && !/^\dK$/i.test(resolutionValue)) body.size = resolutionValue;
   } else {
-    body.size = resolutionValue || DEFAULT_GENERATION_PARAMS.imageSize;
+    body.size = effectiveResolutionValue || DEFAULT_GENERATION_PARAMS.imageSize;
     if (imageSizeValue) body.image_size = imageSizeValue;
   }
   if (taskCapability.supportsImageCount !== false && payload.n !== undefined && payload.n !== null && payload.n !== '') body.n = Number(payload.n);
@@ -1094,7 +1169,7 @@ export async function getVideoContent(videoId) {
         Authorization: `Bearer ${runtimeConfig.apiKey}`
       },
       signal: controller.signal
-    }));
+    }), url);
 
     if (!response.ok) {
       const data = await parseJsonResponse(response);

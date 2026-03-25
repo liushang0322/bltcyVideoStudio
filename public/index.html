@@ -3,14 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sora2Studio</title>
+    <title>Bridge Studio</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <header class="hero">
         <div class="hero-main">
-          <p class="eyebrow">Sora2Studio</p>
+          <p class="eyebrow">Bridge Studio</p>
           <h1>面向 BLTCY 的模型工作台</h1>
           <p class="hero-copy">
             把配置、模型能力、素材、任务和结果收在一个界面里。先连接提供商，再按模型真实能力创建图像或视频任务。
@@ -41,8 +41,33 @@
         </aside>
       </header>
 
+      <section id="productModeBar" class="card product-mode-bar">
+        <div class="product-mode-head">
+          <div>
+            <p class="section-tag">Workspace</p>
+            <h2>Product Mode</h2>
+          </div>
+          <div class="product-mode-actions">
+            <button id="modeCreator" type="button" class="secondary-button">Creator</button>
+            <button id="modeOps" type="button" class="secondary-button">Ops</button>
+            <button id="modeAdmin" type="button" class="secondary-button">Admin</button>
+          </div>
+        </div>
+        <div id="productModeHint" class="status-line"></div>
+      </section>
+
+      <nav id="quickJumpBar" class="card quick-jump-bar" aria-label="Workspace sections">
+        <a href="#setupSection" data-target="setupSection" class="quick-jump-item">配置</a>
+        <a href="#modelSection" data-target="modelSection" class="quick-jump-item">模型</a>
+        <a href="#workspaceSection" data-target="workspaceSection" class="quick-jump-item">创建</a>
+        <a href="#resultRail" data-target="resultRail" class="quick-jump-item">结果</a>
+        <a href="#assetSection" data-target="assetSection" class="quick-jump-item">素材</a>
+        <a href="#queueSection" data-target="queueSection" class="quick-jump-item">队列</a>
+        <a href="#debugSection" data-target="debugSection" class="quick-jump-item">调试</a>
+      </nav>
+
       <main class="page">
-        <section class="workspace-grid">
+        <section id="setupSection" class="workspace-grid top-status-grid">
           <section class="card card-prep">
             <div class="section-head">
               <div>
@@ -90,7 +115,7 @@
               </label>
               <label for="outputDir">
                 输出目录
-                <input id="outputDir" name="outputDir" placeholder="例如 workspace-output 或 D:/SoraOutputs" />
+                <input id="outputDir" name="outputDir" placeholder="例如 workspace-output 或 D:/VideoOutputs" />
               </label>
 
               <div id="advancedConfig" class="advanced-config hidden">
@@ -157,7 +182,7 @@
             <div id="configDraftStatus" class="status-line"></div>
           </section>
 
-          <section class="card">
+          <section id="modelSection" class="card">
             <div class="section-head">
               <div>
                 <p class="section-tag">模型</p>
@@ -204,8 +229,9 @@
           </section>
         </section>
 
-        <section class="studio-grid">
-          <section class="card builder-card">
+        <section id="workspaceSection" class="creation-layout">
+          <div id="creationMain" class="creation-main">
+            <section class="card builder-card">
             <div class="section-head">
               <div>
                 <p class="section-tag">创建</p>
@@ -483,60 +509,64 @@
               <button type="submit" class="submit-button">提交任务</button>
               <div id="submitStatus" class="status-line"></div>
             </form>
-          </section>
+            </section>
+          </div>
 
-          <aside class="card preview-card-shell">
-            <div class="section-head">
-              <div>
-                <p class="section-tag">预览</p>
-                <h2>当前结果</h2>
+          <aside id="resultRail" class="result-rail">
+            <section class="card preview-card-shell">
+              <div class="section-head">
+                <div>
+                  <p class="section-tag">预览</p>
+                  <h2>当前结果</h2>
+                </div>
               </div>
-            </div>
-            <div id="previewState" class="empty-state">选择任务后可在这里预览结果，并下载到浏览器或保存到本地目录。</div>
-            <div id="previewCard" class="preview-card hidden">
-              <div id="previewMeta" class="preview-meta"></div>
-              <div id="previewMedia" class="preview-media-frame"></div>
-              <div class="preview-actions">
-                <a id="openRemoteResult" class="secondary-button link-button" target="_blank">浏览器下载</a>
-                <button id="saveLocalResult" type="button">保存到本地</button>
+              <div id="previewState" class="empty-state">选择任务后可在这里预览结果，并下载到浏览器或保存到本地目录。</div>
+              <div id="previewCard" class="preview-card hidden">
+                <div id="previewMeta" class="preview-meta"></div>
+                <div id="previewTags" class="preview-tags"></div>
+                <div id="previewMedia" class="preview-media-frame"></div>
+                <div class="preview-actions">
+                  <a id="openRemoteResult" class="secondary-button link-button" target="_blank">浏览器下载</a>
+                  <button id="saveLocalResult" type="button">保存到本地</button>
+                </div>
+                <div id="saveStatus" class="status-line"></div>
               </div>
-              <div id="saveStatus" class="status-line"></div>
-            </div>
+            </section>
+
+            <section class="card calm-card">
+              <div class="section-head">
+                <div>
+                  <p class="section-tag">调度</p>
+                  <h2>任务节奏与状态</h2>
+                </div>
+                <div class="config-actions">
+                  <label class="toggle-item toggle-compact">
+                    <input id="autoRefreshToggle" type="checkbox" checked />
+                    <span>自动刷新任务</span>
+                  </label>
+                  <button id="focusLatestTask" type="button" class="secondary-button">定位最新任务</button>
+                </div>
+              </div>
+              <div class="calm-grid">
+                <div class="calm-panel">
+                  <div class="calm-title">当前状态</div>
+                  <div id="calmStatus" class="calm-copy">等待创建任务</div>
+                </div>
+                <div class="calm-panel">
+                  <div class="calm-title">自动刷新</div>
+                  <div id="autoRefreshStatus" class="calm-copy">开启后每 15 秒刷新一次任务状态。</div>
+                </div>
+                <div class="calm-panel">
+                  <div class="calm-title">最近结果</div>
+                  <div id="lastOutcome" class="calm-copy">暂无结果</div>
+                </div>
+              </div>
+            </section>
           </aside>
         </section>
 
-        <section class="card calm-card">
-          <div class="section-head">
-            <div>
-              <p class="section-tag">调度</p>
-              <h2>任务节奏与状态</h2>
-            </div>
-            <div class="config-actions">
-              <label class="toggle-item toggle-compact">
-                <input id="autoRefreshToggle" type="checkbox" checked />
-                <span>自动刷新任务</span>
-              </label>
-              <button id="focusLatestTask" type="button" class="secondary-button">定位最新任务</button>
-            </div>
-          </div>
-          <div class="calm-grid">
-            <div class="calm-panel">
-              <div class="calm-title">当前状态</div>
-              <div id="calmStatus" class="calm-copy">等待创建任务</div>
-            </div>
-            <div class="calm-panel">
-              <div class="calm-title">自动刷新</div>
-              <div id="autoRefreshStatus" class="calm-copy">开启后每 15 秒刷新一次任务状态。</div>
-            </div>
-            <div class="calm-panel">
-              <div class="calm-title">最近结果</div>
-              <div id="lastOutcome" class="calm-copy">暂无结果</div>
-            </div>
-          </div>
-        </section>
-
-        <section class="ops-grid">
-          <section class="card">
+        <section id="opsSection" class="ops-grid bottom-dock">
+          <section id="assetSection" class="card">
             <div class="section-head">
               <div>
                 <p class="section-tag">素材</p>
@@ -550,7 +580,7 @@
             <div id="assetLibrary" class="asset-grid"></div>
           </section>
 
-          <section class="card">
+          <section id="queueSection" class="card">
             <div class="section-head">
               <div>
                 <p class="section-tag">结果</p>
@@ -564,7 +594,7 @@
             <div id="tasks"></div>
           </section>
 
-          <section class="card">
+          <section id="debugSection" class="card">
             <div class="section-head">
               <div>
                 <p class="section-tag">调试</p>

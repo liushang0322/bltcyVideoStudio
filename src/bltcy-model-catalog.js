@@ -591,7 +591,6 @@ export function upgradeCatalogEntry(entry = {}) {
       const endpoint = String(capability.endpoint || '');
       if (
         /^kling-video/i.test(sourceKey)
-        || /^veo/i.test(sourceKey)
         || /^sora/i.test(sourceKey)
         || /seedance/i.test(sourceKey)
         || /^volcv-v1$/i.test(sourceKey)

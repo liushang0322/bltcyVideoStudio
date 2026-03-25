@@ -1,7 +1,12 @@
 import http from 'node:http';
+import { existsSync } from 'node:fs';
+import { readFile, writeFile, rm, mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
 
 const APP_PORT = Number(process.env.SIM_APP_PORT || 3040);
 const MOCK_PORT = Number(process.env.SIM_MOCK_PORT || 4040);
+const STATE_FILE = resolve(process.cwd(), '.sora2studio', 'state.json');
+const SIM_STORAGE_ROOT = resolve(process.cwd(), '.sora2studio-sim');
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -77,6 +82,7 @@ function startMockServer() {
 async function startAppServer() {
   process.env.PORT = String(APP_PORT);
   process.env.OPENAI_BASE_URL = `http://localhost:${MOCK_PORT}`;
+  process.env.SORA2_STUDIO_ROOT = '.sora2studio-sim';
   const { startServer, stopServer } = await import('../src/server.js');
   const port = await startServer();
   return {
@@ -106,8 +112,11 @@ async function run() {
   const checks = [];
   let mock;
   let app;
+  const originalState = existsSync(STATE_FILE) ? await readFile(STATE_FILE, 'utf8') : null;
 
   try {
+    await rm(SIM_STORAGE_ROOT, { recursive: true, force: true });
+    await mkdir(SIM_STORAGE_ROOT, { recursive: true });
     mock = await startMockServer();
     app = await startAppServer();
     await sleep(200);
@@ -174,6 +183,11 @@ async function run() {
   } finally {
     if (app) await app.close();
     if (mock?.server) await new Promise((r) => mock.server.close(() => r()));
+    await rm(SIM_STORAGE_ROOT, { recursive: true, force: true });
+    delete process.env.SORA2_STUDIO_ROOT;
+    if (originalState !== null) {
+      await writeFile(STATE_FILE, originalState, 'utf8');
+    }
   }
 
   console.log('\n=== Simulated Flow Report ===');

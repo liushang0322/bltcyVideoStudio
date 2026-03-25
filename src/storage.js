@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-const ROOT_DIR = resolve(process.cwd(), '.sora2studio');
+const ROOT_DIR = resolve(process.cwd(), process.env.SORA2_STUDIO_ROOT || '.sora2studio');
 const STATE_FILE = join(ROOT_DIR, 'state.json');
 const ASSETS_DIR = join(ROOT_DIR, 'assets');
 
