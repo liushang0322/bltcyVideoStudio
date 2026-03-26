@@ -54,6 +54,7 @@ import {
 
 const WEBHOOK_SECRET = process.env.SORA2_WEBHOOK_SECRET || '';
 const tasks = new Map();
+const MAX_TRANSIENT_VIDEO_AUTO_RETRIES = 2;
 const MODEL_CAPABILITY_CACHE_TTL_MS = 5 * 60 * 1000;
 const MODEL_CACHE_VERSION = 3;
 const STUDIO_ALLOWED_PROVIDERS = new Set(['openai', 'google', 'mid-journey', '快手可灵', '火山豆包']);
@@ -569,7 +570,16 @@ function extractErrorMessage(error) {
   const payload = error?.payload || null;
   const candidates = [
     payload?.error?.message,
+    payload?.data?.error?.message,
+    payload?.data?.task_status_msg,
+    payload?.data?.task_status_message,
+    payload?.data?.status_message,
+    payload?.data?.reason,
     payload?.details?.message,
+    payload?.task_status_msg,
+    payload?.task_status_message,
+    payload?.status_message,
+    payload?.reason,
     payload?.message,
     payload?.error,
     payload?.raw,
@@ -580,9 +590,12 @@ function extractErrorMessage(error) {
     const text = String(candidate || '').trim();
     if (!text) continue;
     if (text === 'upstream_error') continue;
+    if (text.toLowerCase() === 'upstream task failed') continue;
+    if (text.toLowerCase() === 'task failed') continue;
     return text;
   }
 
+  if (error?.providerCode) return `Upstream task failed (${error.providerCode})`;
   return String(error?.message || 'upstream_error');
 }
 
@@ -751,6 +764,21 @@ async function resolveModelConstraintsForModel(modelId) {
 function hasInputValue(value) {
   if (Array.isArray(value)) return value.some((item) => hasInputValue(item));
   return value !== undefined && value !== null && String(value).trim() !== '';
+}
+
+function collectDistinctInputValues(...values) {
+  const normalized = [];
+  const pushValue = (value) => {
+    if (Array.isArray(value)) {
+      for (const item of value) pushValue(item);
+      return;
+    }
+    const text = String(value || '').trim();
+    if (!text) return;
+    if (!normalized.includes(text)) normalized.push(text);
+  };
+  for (const value of values) pushValue(value);
+  return normalized;
 }
 
 function hasDurationCapability(caps, modelId = '') {
@@ -1148,12 +1176,21 @@ async function validateInput(input) {
   }
 
   if (input.type === 'image_to_video') {
-    if (!hasSourceImage && !hasReferenceImage) {
-      return 'image_to_video requires an input image; end frame image is optional';
+    if (!hasSourceImage) {
+      return 'image_to_video requires a dedicated first-frame image (sourceImageUrl or sourceAssetId)';
     }
     const supportsImageToVideoSourceImage = taskCaps.supportsImageToVideoFirstFrame === true || taskCaps.supportsSourceImage === true;
     if (hasSourceImage && !supportsImageToVideoSourceImage) {
       return `model ${input.model} does not support source_image`;
+    }
+    const firstFrameCandidates = collectDistinctInputValues(
+      input.sourceImageUrl,
+      input.sourceAssetId
+    );
+    const endFrameCandidates = collectDistinctInputValues(input.endFrameImageUrl, input.endFrameAssetId);
+    if (firstFrameCandidates.length && endFrameCandidates.length) {
+      const overlap = endFrameCandidates.find((value) => firstFrameCandidates.includes(value));
+      if (overlap) return 'image_to_video first frame and end frame must be different images';
     }
   }
   if (referenceCount > 1 && taskCaps.supportsMultipleReferenceImages !== true) {
@@ -1325,6 +1362,66 @@ function mapFailedTask(localId, input, error) {
   };
 }
 
+function getTaskOutputUrlSnapshot(task = {}) {
+  return String(
+    task?.output?.video_url
+    || task?.output?.url
+    || task?.output?.result?.video_url
+    || task?.output?.result?.url
+    || task?.output?.data?.video_url
+    || task?.output?.data?.url
+    || ''
+  ).trim();
+}
+
+function isMediaNotFoundError(error) {
+  const providerCode = String(error?.providerCode || '').trim().toLowerCase();
+  if (providerCode === 'media_not_found' || providerCode === 'not_found') return true;
+  const payload = error?.payload || null;
+  const text = JSON.stringify({
+    message: error?.message || '',
+    payload: payload || null
+  }).toLowerCase();
+  return text.includes('media not found') || text.includes('media_not_found');
+}
+
+function parseProgressValue(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return numeric;
+}
+
+function shouldAutoRetryTransientVideoFailure(task, latest = {}) {
+  if (!task?.type?.includes('video')) return false;
+  const modelId = String(task?.input?.model || '').trim().toLowerCase();
+  if (!modelId.startsWith('veo')) return false;
+  const attemptCount = Number(task?.autoRetryCount || 0);
+  if (attemptCount >= MAX_TRANSIENT_VIDEO_AUTO_RETRIES) return false;
+  if (String(latest?.status || '').trim().toLowerCase() !== 'failed') return false;
+
+  const providerCode = String(latest?.error?.providerCode || '').trim();
+  if (providerCode) return false;
+
+  const details = latest?.error?.details || {};
+  const nestedError = details?.error || details?.data?.error || {};
+  const progress = parseProgressValue(
+    details?.progress
+    ?? details?.data?.progress
+    ?? details?.detail?.progress
+  );
+  const message = String(nestedError?.message || details?.message || latest?.error?.message || '').trim().toLowerCase();
+  const looksTransientMessage = message.includes('upstream task failed') || message.includes('retry') || message.includes('exception');
+
+  // Retry only when the upstream task entered execution (progress > 0), or message is an obvious transient failure.
+  return Boolean((progress !== null && progress > 0) || looksTransientMessage);
+}
+
+function appendAutoRetryHistory(task, entry = {}) {
+  const history = Array.isArray(task.autoRetryHistory) ? task.autoRetryHistory : [];
+  history.push(entry);
+  task.autoRetryHistory = history.slice(-5);
+}
+
 async function refreshTask(task) {
   if (!task?.providerTaskId || !task.type.includes('video')) return task;
 
@@ -1339,14 +1436,58 @@ async function refreshTask(task) {
         url: latest.video_url
       };
     }
-    task.error = latest.error || null;
+    if (latest.error) {
+      task.error = latest.error;
+    } else if (String(latest.status || '').toLowerCase() !== 'failed') {
+      task.error = null;
+    }
+
+    if (shouldAutoRetryTransientVideoFailure(task, latest)) {
+      const previousProviderTaskId = task.providerTaskId;
+      task.autoRetryCount = Number(task.autoRetryCount || 0) + 1;
+      appendAutoRetryHistory(task, {
+        at: new Date().toISOString(),
+        reason: 'transient_upstream_video_failure',
+        previousProviderTaskId
+      });
+      try {
+        const payload = await buildTaskPayload(task.input || {});
+        const retriedProviderResponse = await createVideoTask(payload);
+        task.providerTaskId = retriedProviderResponse.id || retriedProviderResponse.task_id || retriedProviderResponse.taskId || task.providerTaskId;
+        task.providerMeta = retriedProviderResponse.providerMeta || task.providerMeta || null;
+        task.status = retriedProviderResponse.status || 'queued';
+        task.output = retriedProviderResponse.output || null;
+        task.error = null;
+      } catch (retryError) {
+        task.error = {
+          ...(task.error || {}),
+          autoRetryError: {
+            message: extractErrorMessage(retryError),
+            code: retryError.code || 'UPSTREAM_ERROR',
+            providerCode: retryError.providerCode || null,
+            statusCode: retryError.statusCode || 500,
+            details: retryError.payload || null,
+            requestSummary: retryError.requestSummary || null
+          }
+        };
+      }
+    }
     task.updatedAt = new Date().toISOString();
   } catch (error) {
+    // Some providers may evict task metadata quickly; keep completed task usable when we still have output URL.
+    if (isMediaNotFoundError(error) && String(task.status || '').toLowerCase() === 'completed' && getTaskOutputUrlSnapshot(task)) {
+      task.error = null;
+      task.updatedAt = new Date().toISOString();
+      await updateTaskCache(task);
+      return task;
+    }
     task.error = {
-      message: error.message,
+      message: extractErrorMessage(error),
       code: error.code || 'UPSTREAM_ERROR',
       providerCode: error.providerCode || null,
-      statusCode: error.statusCode || 500
+      statusCode: error.statusCode || 500,
+      details: error.payload || null,
+      requestSummary: error.requestSummary || null
     };
     task.updatedAt = new Date().toISOString();
   }
@@ -1373,7 +1514,17 @@ function inferFileExtension(kind, url, mimeType, originalName = '') {
 async function resolveTaskDownload(task) {
   const kind = task.type.includes('video') ? 'video' : 'image';
   if (kind === 'video') {
-    const latest = task.providerTaskId ? await getVideoTask(task.providerTaskId, task.providerMeta || {}) : null;
+    const taskOutputUrl = getTaskOutputUrlSnapshot(task);
+    let latest = null;
+    let latestLookupError = null;
+    if (task.providerTaskId) {
+      try {
+        latest = await getVideoTask(task.providerTaskId, task.providerMeta || {});
+      } catch (error) {
+        latestLookupError = error;
+      }
+    }
+
     const sourceUrl = latest?.video_url
       || latest?.output?.url
       || latest?.output?.video_url
@@ -1381,10 +1532,20 @@ async function resolveTaskDownload(task) {
       || latest?.result?.video_url
       || latest?.data?.url
       || latest?.data?.video_url
-      || task.output?.video_url
-      || task.output?.url
+      || taskOutputUrl
       || '';
+
     if (!sourceUrl && task.providerTaskId) {
+      if (latestLookupError && isMediaNotFoundError(latestLookupError) && taskOutputUrl) {
+        const fallbackResult = await downloadBinary(taskOutputUrl);
+        return {
+          kind,
+          buffer: fallbackResult.buffer,
+          mimeType: fallbackResult.mimeType || 'video/mp4',
+          fileName: `${String(task.input?.model || 'video').replace(/[^\w.-]+/g, '-')}-${task.id}.${inferFileExtension(kind, taskOutputUrl, fallbackResult.mimeType || 'video/mp4')}`
+        };
+      }
+      if (latestLookupError && !isMediaNotFoundError(latestLookupError)) throw latestLookupError;
       const content = await getVideoContent(task.providerTaskId);
       return {
         kind,
@@ -1640,15 +1801,13 @@ async function buildTaskPayload(input) {
   const supportsReferenceImage = taskCaps.supportsImageToVideoReferenceImages === true || taskCaps.supportsTextToImageReferenceImages === true || taskCaps.supportsTextToVideoReferenceImages === true || taskCaps.supportsReferenceImage === true;
   const supportsMultipleReferenceImages = taskCaps.supportsMultipleReferenceImages === true;
   const supportsEndFrame = taskCaps.supportsImageToVideoEndFrame === true;
-  const primaryReferenceImageUrl = String(input.referenceImageUrl || '').trim() || (Array.isArray(input.referenceImageUrls) ? String(input.referenceImageUrls[0] || '').trim() : '');
-  const primaryReferenceImageDataUrl = referenceImageDataUrl || referenceImageDataUrls[0] || '';
-  const primaryImageUrl = String(input.sourceImageUrl || '').trim() || primaryReferenceImageUrl;
-  const primaryImageDataUrl = sourceImageDataUrl || primaryReferenceImageDataUrl;
+  const primaryImageUrl = String(input.sourceImageUrl || '').trim();
+  const primaryImageDataUrl = sourceImageDataUrl || '';
   const isImageToVideo = input.type === 'image_to_video';
   const resolvedSourceImageUrl = isImageToVideo && supportsSourceImage ? primaryImageUrl : input.sourceImageUrl;
   const resolvedSourceImageDataUrl = isImageToVideo && supportsSourceImage ? primaryImageDataUrl : sourceImageDataUrl;
-  const resolvedReferenceImageUrl = isImageToVideo && !supportsSourceImage && supportsReferenceImage ? primaryImageUrl : input.referenceImageUrl;
-  const resolvedReferenceImageDataUrl = isImageToVideo && !supportsSourceImage && supportsReferenceImage ? primaryImageDataUrl : referenceImageDataUrl;
+  const resolvedReferenceImageUrl = input.referenceImageUrl;
+  const resolvedReferenceImageDataUrl = referenceImageDataUrl;
   const resolvedReferenceImageUrls = supportsMultipleReferenceImages ? input.referenceImageUrls : undefined;
   const resolvedReferenceImageDataUrls = supportsMultipleReferenceImages ? referenceImageDataUrls : undefined;
 
@@ -2147,6 +2306,20 @@ const server = http.createServer(async (req, res) => {
     const studioTaskId = url.searchParams.get('studioTaskId');
     const page = Math.max(1, Number(url.searchParams.get('page') || '1') || 1);
     const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') || '20') || 20));
+
+    // Keep the task list fresh: poll a small recent window so queued/running/failed video tasks can transition automatically.
+    const preloaded = listStoredTasks().sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    const refreshCandidates = preloaded
+      .filter((task) => task?.providerTaskId && task?.type?.includes('video') && ['queued', 'running', 'failed'].includes(String(task.status || '').toLowerCase()))
+      .slice(0, 3);
+    for (const task of refreshCandidates) {
+      try {
+        await refreshTask(task);
+      } catch {
+        // Ignore per-task refresh failures in list mode; the error is persisted on each task itself.
+      }
+    }
+
     let all = listStoredTasks().sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     if (status) all = all.filter((task) => task.status === status);
     if (studioTaskId) all = all.filter((task) => task.studioTaskId === studioTaskId);

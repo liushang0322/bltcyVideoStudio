@@ -8,6 +8,43 @@
   </head>
   <body>
     <div class="app-shell">
+      <header id="topOpsBar" class="top-ops-bar" aria-label="Global status bar">
+        <div class="top-ops-brand">
+          <strong>bltcyVideoStudio</strong>
+          <span>Model-Driven UI</span>
+        </div>
+        <div class="top-ops-config">
+          <label for="topBaseUrl">
+            API Base URL
+            <input id="topBaseUrl" type="text" placeholder="https://api.openai.com 或 https://api.bltcy.ai" />
+          </label>
+          <label for="topApiKey">
+            Sora2 API Key
+            <input id="topApiKey" type="password" placeholder="sk-..." />
+          </label>
+          <label for="topProxyUrl">
+            系统代理地址
+            <input id="topProxyUrl" type="text" placeholder="http://127.0.0.1:7899（留空直连）" />
+          </label>
+        </div>
+        <div class="top-ops-running" aria-live="polite">
+          <div class="top-ops-running-head">
+            <span>Running Tasks</span>
+            <strong id="topRunningCount">0 / 0</strong>
+          </div>
+          <div class="top-ops-running-track">
+            <div id="topRunningBar" class="top-ops-running-fill" style="width: 0%"></div>
+          </div>
+        </div>
+        <div class="top-ops-actions">
+          <button id="topConnectivityIndicator" type="button" class="secondary-button top-connectivity">
+            <span id="topConnectivityDot" class="top-connectivity-dot status-unknown"></span>
+            <span id="topConnectivityLabel">Connectivity: Unknown</span>
+          </button>
+          <button id="topRunDiagnostics" type="button" class="secondary-button">Run Diagnostics</button>
+        </div>
+      </header>
+
       <header class="hero">
         <div class="hero-main">
           <p class="eyebrow">Bridge Studio</p>
@@ -435,7 +472,7 @@
               </div>
 
               <div id="endFrameUploadWrap" class="inline-grid hidden">
-                <label for="endFrameUploadInput">
+                <label id="endFrameUploadLabel" for="endFrameUploadInput">
                   上传尾帧
                   <input id="endFrameUploadInput" type="file" accept="image/*" />
                 </label>

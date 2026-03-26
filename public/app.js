@@ -13,6 +13,15 @@ const els = {
   runDiagnostics: document.getElementById('runDiagnostics'),
   connectivityStatus: document.getElementById('connectivityStatus'),
   diagnosticsStatus: document.getElementById('diagnosticsStatus'),
+  topRunningCount: document.getElementById('topRunningCount'),
+  topRunningBar: document.getElementById('topRunningBar'),
+  topBaseUrl: document.getElementById('topBaseUrl'),
+  topApiKey: document.getElementById('topApiKey'),
+  topProxyUrl: document.getElementById('topProxyUrl'),
+  topConnectivityIndicator: document.getElementById('topConnectivityIndicator'),
+  topConnectivityDot: document.getElementById('topConnectivityDot'),
+  topConnectivityLabel: document.getElementById('topConnectivityLabel'),
+  topRunDiagnostics: document.getElementById('topRunDiagnostics'),
   loadModels: document.getElementById('loadModels'),
   reloadModelsFull: document.getElementById('reloadModelsFull'),
   reloadModelsFromDocs: document.getElementById('reloadModelsFromDocs'),
@@ -97,7 +106,10 @@ const els = {
   sourceUploadInput: document.getElementById('sourceUploadInput'),
   referenceUploadInput: document.getElementById('referenceUploadInput'),
   endFrameGroup: document.getElementById('endFrameGroup'),
+  endFrameImageWrap: document.getElementById('endFrameImageWrap'),
+  endFrameAssetWrap: document.getElementById('endFrameAssetWrap'),
   endFrameUploadWrap: document.getElementById('endFrameUploadWrap'),
+  endFrameUploadLabel: document.getElementById('endFrameUploadLabel'),
   endFrameImageUrl: document.getElementById('endFrameImageUrl'),
   endFrameAssetSelect: document.getElementById('endFrameAssetSelect'),
   endFrameUploadInput: document.getElementById('endFrameUploadInput'),
@@ -185,6 +197,7 @@ const state = {
   selectedTaskId: '',
   logs: [],
   autoRefreshTimer: null,
+  connectivityPollTimer: null,
   modelSyncTimer: null,
   modelGroups: {
     image: [],
@@ -197,10 +210,17 @@ const state = {
     text_to_video: [],
     image_to_video: []
   },
+  taskModelSelections: {
+    text_to_image: '',
+    image_edit: '',
+    text_to_video: '',
+    image_to_video: ''
+  },
   capabilitySchema: null,
   modelCapabilityViewCache: new Map(),
   providerCapabilities: {},
   hasStoredApiKey: false,
+  connectivitySnapshot: null,
   imageToVideoInputSequence: [],
   imageToVideoSourceAssetId: '',
   imageToVideoReferenceAssetOrder: [],
@@ -385,17 +405,13 @@ function getTaskDisplayLabel(taskType = '') {
 }
 
 function getTaskPromptModeLabel(taskType = '') {
-  if (taskType === 'image_to_video') return '图像序列 + Prompt';
+  if (taskType === 'image_to_video') return '首帧 + 尾帧 + 参考图 + Prompt';
   if (taskType === 'image_edit') return '原图 + Prompt';
   if (taskType === 'text_to_image') return 'Prompt 生图';
   return 'Prompt 生视频';
 }
 
 function hasSourceVisualInput(taskType = currentTaskType()) {
-  if (taskType === 'image_to_video') {
-    const sequenceSummary = getImageToVideoInputSequenceSummary();
-    return Boolean(sequenceSummary?.primary);
-  }
   const sourceImageUrl = String(els.sourceImageUrl?.value || '').trim();
   const sourceAssetId = String(els.sourceAssetSelect?.value || '').trim();
   return Boolean(sourceImageUrl || sourceAssetId);
@@ -470,9 +486,9 @@ function updateProductModeUiState() {
   });
   if (els.productModeHint) {
     const map = {
-      creator: 'Creator mode: hide setup/debug and focus on creation + result.',
-      ops: 'Ops mode: focus on queue, compare, and result review.',
-      admin: 'Admin mode: show full setup, diagnostics, and debug.'
+      creator: 'Creator mode: focus prompt editing and generation with full control panels visible.',
+      ops: 'Ops mode: focus queue, retry, and diagnostics with controls still pinned.',
+      admin: 'Admin mode: full visibility for provider configuration, model sync, and debugging.'
     };
     els.productModeHint.textContent = map[mode] || map.creator;
   }
@@ -483,12 +499,9 @@ function applyProductMode(mode, persist = true) {
   state.uiMode = normalized;
   document.body.classList.remove('app-mode-creator', 'app-mode-ops', 'app-mode-admin');
   document.body.classList.add(`app-mode-${normalized}`);
-  const showSetup = normalized === 'admin';
-  const showDebug = normalized === 'admin';
-  const showCreationMain = normalized !== 'ops';
-  showElement(els.setupSection, showSetup);
-  showElement(els.creationMain, showCreationMain);
-  showElement(els.debugSection, showDebug);
+  showElement(els.setupSection, true);
+  showElement(els.creationMain, true);
+  showElement(els.debugSection, true);
   showElement(els.workspaceSection, true);
   showElement(els.resultRail, true);
   showElement(els.opsSection, true);
@@ -760,6 +773,8 @@ function normalizeUserErrorMessage(error, fallback = '操作失败，请稍后�
   const raw = String(error?.message || '').trim();
   if (error?.code === 'NO_MODELS_FOR_TASK_TYPE') return '当前任务类型没有可用模型，请先加载模型或切换任务类型。';
   if (error?.code === 'TIMEOUT') return '请求超时，请稍后重试。';
+  if (raw.includes('requires a dedicated first-frame image')) return '图生视频需要单独提供首帧图（URL 或本地素材）。';
+  if (raw.includes('first frame and end frame must be different images')) return '首帧图与尾帧图不能是同一张，请更换尾帧后再提交。';
   if (!raw) return fallback;
   return raw.includes('?') ? fallback : raw;
 }
@@ -1470,6 +1485,7 @@ function fillConfigForm(config) {
   setChecked('videoEnabled', config.capabilities?.videoEnabled ?? config.videoEnabled ?? true);
   state.savedConfigSnapshot = snapshotConfigPayload(getConfigPayload());
   updateConfigDirtyState();
+  syncTopConfigMirrorFromMain();
 }
 
 function getConfigPayload() {
@@ -1536,6 +1552,7 @@ function applyPreset(key) {
   setInputValue('inputReferenceFormat', preset.inputReferenceFormat || '');
   setChecked('imageEnabled', preset.imageEnabled ?? true);
   setChecked('videoEnabled', preset.videoEnabled ?? true);
+  syncTopConfigMirrorFromMain();
 }
 
 function renderProfiles() {
@@ -1582,11 +1599,12 @@ function renderStudioTasks() {
       const tags = Array.isArray(item.tags) && item.tags.length
         ? `<div class="studio-task-tags">${item.tags.map((tag) => `<span class="pill">${escapeHtml(tag)}</span>`).join('')}</div>`
         : '';
+      const statusTone = normalizeStatusTone(item.status || 'active');
       return `
         <article class="studio-task-card${active}" data-studio-task-id="${escapeAttr(item.id)}">
           <div class="studio-task-card-top">
             <strong>${escapeHtml(item.name)}</strong>
-            <span class="pill">${escapeHtml(item.status || 'active')}</span>
+            <span class="pill status-${escapeAttr(statusTone)}">${escapeHtml(item.status || 'active')}</span>
           </div>
           <div class="studio-task-card-meta">${escapeHtml(meta.filter(Boolean).join(' · '))}</div>
           <div class="studio-task-card-desc">${escapeHtml(desc || '暂无任务描述')}</div>
@@ -1629,6 +1647,23 @@ function currentTaskType() {
 
 function selectedModelIdForTask(taskType = currentTaskType()) {
   return taskType.includes('video') ? els.videoModel.value : els.imageModel.value;
+}
+
+function rememberModelSelection(taskType = currentTaskType()) {
+  const normalizedTaskType = String(taskType || '').trim();
+  if (!normalizedTaskType) return;
+  const modelId = String(selectedModelIdForTask(normalizedTaskType) || '').trim();
+  if (!modelId) return;
+  state.taskModelSelections[normalizedTaskType] = modelId;
+}
+
+function getSiblingTaskType(taskType = '') {
+  const normalized = String(taskType || '').trim();
+  if (normalized === 'text_to_video') return 'image_to_video';
+  if (normalized === 'image_to_video') return 'text_to_video';
+  if (normalized === 'text_to_image') return 'image_edit';
+  if (normalized === 'image_edit') return 'text_to_image';
+  return '';
 }
 
 function getAllTaskTypes() {
@@ -1763,19 +1798,26 @@ function getModelsForTask(taskType = currentTaskType()) {
 async function refreshCreateModelOptions() {
   const taskType = currentTaskType();
   const taskModels = getModelsForTask(taskType);
+  const isVideoTask = taskType.includes('video');
+  const selectEl = isVideoTask ? els.videoModel : els.imageModel;
+  const siblingTaskType = getSiblingTaskType(taskType);
+  const preferredModelId = String(
+    state.taskModelSelections[taskType]
+    || selectEl?.value
+    || state.taskModelSelections[siblingTaskType]
+    || ''
+  ).trim();
 
-  if (taskType.includes('video')) {
-    await renderSelectOptionsChunked(els.videoModel, taskModels, { chunkSize: 20 });
+  await renderSelectOptionsChunked(selectEl, taskModels, { chunkSize: 20 });
+
+  let resolvedModelId = '';
+  if (preferredModelId && taskModels.some((item) => item.id === preferredModelId)) {
+    resolvedModelId = preferredModelId;
   } else {
-    await renderSelectOptionsChunked(els.imageModel, taskModels, { chunkSize: 20 });
+    resolvedModelId = taskModels[0]?.id || '';
   }
-
-  if (!taskModels.some((item) => item.id === els.imageModel.value) && !taskType.includes('video')) {
-    els.imageModel.value = taskModels[0]?.id || '';
-  }
-  if (!taskModels.some((item) => item.id === els.videoModel.value) && taskType.includes('video')) {
-    els.videoModel.value = taskModels[0]?.id || '';
-  }
+  selectEl.value = resolvedModelId;
+  if (resolvedModelId) state.taskModelSelections[taskType] = resolvedModelId;
 }
 
 async function renderModelPanel() {
@@ -2546,6 +2588,9 @@ function ensureVisualInputEnhancements() {
   decorateCard(els.sourceImageWrap, 'primary', '主图');
   decorateCard(els.sourceAssetWrap, 'primary', '主图');
   decorateCard(els.sourceUploadWrap, 'primary', '主图');
+  decorateCard(els.endFrameImageWrap, 'primary', '尾帧');
+  decorateCard(els.endFrameAssetWrap, 'primary', '尾帧');
+  decorateCard(els.endFrameUploadLabel, 'primary', '尾帧');
   decorateCard(els.referenceImageWrap, 'reference', '附加图');
   decorateCard(els.referenceAssetWrap, 'reference', '附加图');
   decorateCard(els.referenceUploadWrap, 'reference', '附加图');
@@ -3349,6 +3394,7 @@ function renderImageToVideoSequenceWorkspace() {
   list.innerHTML = sequence.map((item, index) => {
     const key = sequenceKeyForImageToVideoItem(item);
     const isPrimary = index === 0;
+    const isEndFrame = isSameAsCurrentEndFrame(item);
     const orderLabel = `第 ${index + 1} 张输入图`;
     const metaLabel = item.kind === 'asset' ? '本地素材' : '图片 URL';
     const moveUpDisabled = index === 0 ? 'disabled' : '';
@@ -3372,6 +3418,7 @@ function renderImageToVideoSequenceWorkspace() {
         </div>
         <div class="local-image-actions">
           ${!isPrimary ? `<button type="button" class="secondary-button" data-action="sequence-promote" data-sequence-key="${escapeAttr(key)}">设为第 1 张</button>` : ''}
+          <button type="button" class="secondary-button${isEndFrame ? ' task-compare-toggle-active' : ''}" data-action="sequence-set-end" data-sequence-key="${escapeAttr(key)}">${isEndFrame ? '已设为尾帧' : '设为尾帧'}</button>
           ${item.kind === 'url' ? `<button type="button" class="secondary-button" data-action="sequence-edit-url" data-sequence-key="${escapeAttr(key)}">编辑 URL</button>` : ''}
           <button type="button" class="secondary-button" data-action="sequence-move-up" data-sequence-key="${escapeAttr(key)}" ${moveUpDisabled}>前移</button>
           <button type="button" class="secondary-button" data-action="sequence-move-down" data-sequence-key="${escapeAttr(key)}" ${moveDownDisabled}>后移</button>
@@ -3439,24 +3486,19 @@ function applyImageToVideoSequenceToLegacyState() {
 }
 
 function ensureImageToVideoSequenceState() {
-  if (!getImageToVideoInputSequence().length) {
-    state.imageToVideoInputSequence = buildImageToVideoInputSequenceFromLegacyState();
-  }
-  applyImageToVideoSequenceToLegacyState();
+  if (String(els.typeSelect?.value || '') !== 'image_to_video') return;
+  syncImageToVideoAssetStateFromForm();
+  syncImageToVideoUrlStateFromForm();
+  state.imageToVideoInputSequence = [];
 }
 
 function setImageToVideoInputSequence(next) {
   const normalized = Array.isArray(next)
     ? next.map((item) => normalizeImageToVideoSequenceItem(item)).filter(Boolean)
     : [];
-  const seen = new Set();
-  state.imageToVideoInputSequence = normalized.filter((item) => {
-    const key = sequenceKeyForImageToVideoItem(item);
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  applyImageToVideoSequenceToLegacyState();
+  state.imageToVideoInputSequence = normalized;
+  applyImageToVideoAssetStateToForm();
+  applyImageToVideoUrlStateToForm();
 }
 
 function appendImageToVideoInputSequence(items, mode = 'append') {
@@ -3502,6 +3544,8 @@ function updateImageToVideoInputSequenceItem(action, key) {
   const next = getImageToVideoInputSequence();
   const index = next.findIndex((item) => sequenceKeyForImageToVideoItem(item) === key);
   if (index < 0) return;
+  const current = next[index];
+  const removedEndFrame = action === 'remove' && isSameAsCurrentEndFrame(current);
   if (action === 'remove') {
     next.splice(index, 1);
   } else if (action === 'promote' && index > 0) {
@@ -3522,12 +3566,37 @@ function updateImageToVideoInputSequenceItem(action, key) {
     }
   }
   setImageToVideoInputSequence(next);
+  if (removedEndFrame) {
+    if (els.endFrameAssetSelect) els.endFrameAssetSelect.value = '';
+    if (els.endFrameImageUrl) els.endFrameImageUrl.value = '';
+  }
 }
 
 function getImageToVideoInputSequenceSummary() {
-  const sequence = getImageToVideoInputSequence();
-  const primary = sequence[0] || null;
-  const referenceItems = sequence.slice(1);
+  const sourceAssetId = String(els.sourceAssetSelect?.value || '').trim();
+  const sourceUrl = String(els.sourceImageUrl?.value || '').trim();
+  const primary = sourceAssetId
+    ? { kind: 'asset', value: sourceAssetId }
+    : (sourceUrl ? { kind: 'url', value: sourceUrl } : null);
+  const referenceItems = [];
+  const seen = new Set();
+  const pushUnique = (item) => {
+    const normalized = normalizeImageToVideoSequenceItem(item);
+    if (!normalized) return;
+    const key = sequenceKeyForImageToVideoItem(normalized);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    referenceItems.push(normalized);
+  };
+  Array.from(els.referenceAssetSelect?.options || [])
+    .filter((option) => option.selected && option.value)
+    .forEach((option) => pushUnique({ kind: 'asset', value: option.value }));
+  String(els.referenceImageUrl?.value || '')
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .forEach((url) => pushUnique({ kind: 'url', value: url }));
+  const sequence = primary ? [primary].concat(referenceItems) : referenceItems.slice();
   return {
     sequence,
     primary,
@@ -3547,9 +3616,6 @@ function syncImageToVideoAssetStateFromForm() {
   const ordered = state.imageToVideoReferenceAssetOrder.filter((id) => selectedReferenceIds.includes(id));
   const missing = selectedReferenceIds.filter((id) => !ordered.includes(id));
   state.imageToVideoReferenceAssetOrder = ordered.concat(missing);
-  if (String(els.typeSelect?.value || '') === 'image_to_video') {
-    state.imageToVideoInputSequence = buildImageToVideoInputSequenceFromLegacyState();
-  }
 }
 
 function applyImageToVideoAssetStateToForm() {
@@ -3591,9 +3657,6 @@ function syncImageToVideoUrlStateFromForm() {
   const ordered = state.imageToVideoReferenceUrlOrder.filter((url) => rawUrls.includes(url));
   const missing = rawUrls.filter((url) => !ordered.includes(url));
   state.imageToVideoReferenceUrlOrder = ordered.concat(missing);
-  if (String(els.typeSelect?.value || '') === 'image_to_video') {
-    state.imageToVideoInputSequence = buildImageToVideoInputSequenceFromLegacyState();
-  }
 }
 
 function applyImageToVideoUrlStateToForm() {
@@ -3646,6 +3709,9 @@ function updateImageToVideoInputSummary(caps) {
   updateBadge(els.sourceImageWrap, '主图 / 首帧');
   updateBadge(els.sourceAssetWrap, '主图 / 首帧');
   updateBadge(els.sourceUploadWrap, '主图 / 首帧');
+  updateBadge(els.endFrameImageWrap, '尾帧 / 结束画面');
+  updateBadge(els.endFrameAssetWrap, '尾帧 / 结束画面');
+  updateBadge(els.endFrameUploadLabel, '尾帧 / 结束画面');
   updateBadge(els.referenceImageWrap, caps.supportsMultipleReferenceImages ? '附加参考图' : '参考图');
   updateBadge(els.referenceAssetWrap, caps.supportsMultipleReferenceImages ? '附加参考图' : '参考图');
   updateBadge(els.referenceUploadWrap, caps.supportsMultipleReferenceImages ? '附加参考图' : '参考图');
@@ -3736,11 +3802,11 @@ function renderCapabilityFieldLayout(taskType, model, caps, generationMode) {
   els.capabilityFieldLayout.classList.remove('hidden');
   const fields = schemaEntry.fields.filter((field) => field?.visible !== false);
   const titleMap = new Map();
-  titleMap.set('prompt', taskType === 'image_to_video' ? '可选的镜头、运动和节奏描述，用于补充输入图序列。' : '当前创作入口的核心文本输入。');
+  titleMap.set('prompt', taskType === 'image_to_video' ? '用于补充首帧/尾帧和参考图约束，描述镜头、运动和节奏。' : '当前创作入口的核心文本输入。');
   titleMap.set('videoGenerationMode', generationMode === 'storyboard' ? '当前已切到故事板模式。' : '当前会决定标准模式、故事板还是智能分镜。');
   titleMap.set('storyboardText', '用于组织多镜头文本结构，只在故事板相关能力里生效。');
-  titleMap.set('sourceImage', taskType === 'image_to_video' ? '现在由“输入图序列”统一承载第 1 张输入图。' : '可通过 URL、本地素材或上传提供。');
-  titleMap.set('referenceImages', taskType === 'image_to_video' ? '现在由“输入图序列”承载第 2-N 张参考图。' : '用于约束主体、风格或画面方向。');
+  titleMap.set('sourceImage', taskType === 'image_to_video' ? '首帧作为起始画面，需单独填写。' : '可通过 URL、本地素材或上传提供。');
+  titleMap.set('referenceImages', taskType === 'image_to_video' ? '参考图单独填写；支持多图时请按一行一张或多选素材。' : '用于约束主体、风格或画面方向。');
   titleMap.set('endFrameImage', '用于约束结尾画面，只在支持尾帧的模型里显示。');
   titleMap.set('duration', '会根据模型支持情况限制为固定档位或允许区间。');
   titleMap.set('aspectRatio', '画幅比例会与尺寸和分辨率一起影响最终结果。');
@@ -3913,9 +3979,7 @@ function arrangeCreateFormBySchema(taskType, model, caps) {
   if (fieldMap.has('aspectRatio') || fieldMap.has('imageSize')) addToBucket(getBucket('aspectRatio', 'basic'), blocks.sizeRow);
   if (fieldMap.has('duration') || fieldMap.has('resolution')) addToBucket(getBucket(fieldMap.has('duration') ? 'duration' : 'resolution', 'basic'), blocks.resolutionRow);
 
-  if (taskType === 'image_to_video' && (fieldMap.has('sourceImage') || fieldMap.has('referenceImages'))) {
-    addToBucket(getBucket('sourceImage', 'basic'), blocks.imageToVideoInputPanel, blocks.imageToVideoSequenceWorkspace);
-  } else if (fieldMap.has('sourceImage') || fieldMap.has('referenceImages')) {
+  if (fieldMap.has('sourceImage') || fieldMap.has('referenceImages')) {
     addToBucket(getBucket(fieldMap.has('sourceImage') ? 'sourceImage' : 'referenceImages', 'basic'), blocks.urlRow, blocks.assetRow, blocks.uploadRow, blocks.visualInputGuide, blocks.sourceImageHint, blocks.referenceImageHint);
   }
 
@@ -4346,24 +4410,54 @@ function deriveTaskRoleCapabilities(taskType, caps = {}) {
 
 function normalizeImageToVideoPrimaryInputs() {
   if (String(els.typeSelect?.value || '') !== 'image_to_video') return;
+  const summary = getImageToVideoInputSequenceSummary();
+  if (summary.primary) return;
+
   if (els.sourceImageUrl && !String(els.sourceImageUrl.value || '').trim()) {
-    const fallbackUrl = String(els.referenceImageUrl?.value || '')
+    const urls = String(els.referenceImageUrl?.value || '')
       .split(/\r?\n|,/)
       .map((item) => item.trim())
-      .find(Boolean);
-    if (fallbackUrl) els.sourceImageUrl.value = fallbackUrl;
+      .filter(Boolean);
+    if (urls.length) {
+      els.sourceImageUrl.value = urls[0];
+      if (els.referenceImageUrl) {
+        els.referenceImageUrl.value = urls.slice(1).join('\n');
+      }
+    }
   }
   if (els.sourceAssetSelect && !String(els.sourceAssetSelect.value || '').trim()) {
-    const fallbackReferenceOption = Array.from(els.referenceAssetSelect?.selectedOptions || []).find((option) => option.value);
-    if (fallbackReferenceOption?.value) els.sourceAssetSelect.value = fallbackReferenceOption.value;
+    const selected = Array.from(els.referenceAssetSelect?.selectedOptions || [])
+      .map((option) => option.value)
+      .filter(Boolean);
+    if (selected.length) {
+      els.sourceAssetSelect.value = selected[0];
+      const remain = new Set(selected.slice(1));
+      Array.from(els.referenceAssetSelect?.options || []).forEach((option) => {
+        option.selected = remain.has(option.value);
+      });
+    }
   }
-  if (els.referenceImageUrl) els.referenceImageUrl.value = '';
-  if (els.referenceAssetSelect) {
-    Array.from(els.referenceAssetSelect.options || []).forEach((option) => {
-      option.selected = false;
-    });
+}
+
+function isSameAsCurrentEndFrame(item) {
+  const normalized = normalizeImageToVideoSequenceItem(item);
+  if (!normalized) return false;
+  if (normalized.kind === 'asset') {
+    return String(els.endFrameAssetSelect?.value || '').trim() === normalized.value;
   }
-  if (els.referenceUploadInput) els.referenceUploadInput.value = '';
+  return String(els.endFrameImageUrl?.value || '').trim() === normalized.value;
+}
+
+function setImageToVideoEndFrameFromSequenceItem(item) {
+  const normalized = normalizeImageToVideoSequenceItem(item);
+  if (!normalized) return;
+  if (normalized.kind === 'asset') {
+    if (els.endFrameAssetSelect) els.endFrameAssetSelect.value = normalized.value;
+    if (els.endFrameImageUrl) els.endFrameImageUrl.value = '';
+  } else {
+    if (els.endFrameImageUrl) els.endFrameImageUrl.value = normalized.value;
+    if (els.endFrameAssetSelect) els.endFrameAssetSelect.value = '';
+  }
 }
 
 function createStoryboardShot(shot = {}) {
@@ -4686,10 +4780,10 @@ function applyCreateFormRulesV2() {
   showElement(els.imageOptionRow, !isVideo);
   syncStoryboardMode();
 
-  const usesUnifiedPrimaryImage = isImageToVideo;
   const needSource = isImageEdit || isImageToVideo;
-  const canPrimaryImage = caps.supportsPrimaryImageInput;
-  const canSource = usesUnifiedPrimaryImage ? canPrimaryImage : (caps.supportsImageEditSourceImage || caps.supportsSourceImage);
+  const canSource = isImageToVideo
+    ? true
+    : (caps.supportsImageEditSourceImage || caps.supportsSourceImage);
   const canReference = isImageToVideo
     ? caps.supportsImageToVideoReferenceImages
     : (taskType === 'text_to_video'
@@ -4720,8 +4814,8 @@ function applyCreateFormRulesV2() {
   setFieldLabel(els.referenceImageWrap, semantics.referenceLabel);
   setFieldLabel(els.referenceAssetWrap, semantics.referenceAssetLabel);
   setFieldLabel(els.referenceUploadWrap, semantics.referenceUploadLabel);
-  setFieldLabel(document.getElementById('endFrameImageWrap'), semantics.endFrameLabel);
-  setFieldLabel(document.getElementById('endFrameAssetWrap'), semantics.endFrameAssetLabel);
+  setFieldLabel(els.endFrameImageWrap, semantics.endFrameLabel);
+  setFieldLabel(els.endFrameAssetWrap, semantics.endFrameAssetLabel);
   if (els.sourceImageUrl) els.sourceImageUrl.placeholder = semantics.sourcePlaceholder;
   if (els.referenceImageUrl) els.referenceImageUrl.placeholder = semantics.referencePlaceholder;
   if (els.endFrameImageUrl) els.endFrameImageUrl.placeholder = semantics.endFramePlaceholder;
@@ -4734,8 +4828,8 @@ function applyCreateFormRulesV2() {
   setFieldHint(els.endFrameHint, semantics.endFrameHint);
   setFieldHint(els.omniInputHint, semantics.omniHint);
 
-  if (usesUnifiedPrimaryImage) {
-    normalizeImageToVideoPrimaryInputs();
+  if (isImageToVideo) {
+    state.imageToVideoInputSequence = [];
   }
   if (els.referenceAssetSelect) {
     const supportsMultipleReferenceImages = isImageToVideo
@@ -4761,8 +4855,8 @@ function applyCreateFormRulesV2() {
   showElement(els.referenceUploadWrap, showReferenceInputs && !hidesVisualInputsForStructuredMode);
   showElement(els.endFrameGroup, canEndFrame && !hidesVisualInputsForStructuredMode);
   showElement(els.endFrameUploadWrap, canEndFrame && !hidesVisualInputsForStructuredMode);
-  showElement(els.imageToVideoInputPanel, isImageToVideo && schemaAllows('sourceImage', 'referenceImages') && !hidesVisualInputsForStructuredMode);
-  showElement(els.imageToVideoSequenceWorkspace, isImageToVideo && schemaAllows('sourceImage', 'referenceImages') && !hidesVisualInputsForStructuredMode);
+  showElement(els.imageToVideoInputPanel, false);
+  showElement(els.imageToVideoSequenceWorkspace, false);
   showElement(els.imageToVideoLocalWorkspace, false);
   showElement(els.imageToVideoUrlWorkspace, false);
   showElement(els.videoAdvancedRow, (canProviderMode || canCfgScale) && !storyboardMode);
@@ -4776,19 +4870,7 @@ function applyCreateFormRulesV2() {
   showElement(els.referenceImageHint, Boolean(semantics.referenceHint) && showReferenceInputs && !hidesVisualInputsForStructuredMode);
   showElement(els.endFrameHint, Boolean(semantics.endFrameHint) && canEndFrame && !hidesVisualInputsForStructuredMode);
   showElement(els.omniInputHint, Boolean(semantics.omniHint) && canOmniInputs && !hidesVisualInputsForStructuredMode);
-  if (isImageToVideo && !hidesVisualInputsForStructuredMode) {
-    showElement(els.sourceImageWrap, false);
-    showElement(els.sourceAssetWrap, false);
-    showElement(els.sourceUploadWrap, false);
-    showElement(els.referenceImageWrap, false);
-    showElement(els.referenceAssetWrap, false);
-    showElement(els.referenceUploadWrap, false);
-    showElement(els.sourceImageHint, false);
-    showElement(els.referenceImageHint, false);
-  }
-  if (isImageToVideo && !hidesVisualInputsForStructuredMode) {
-    updateImageToVideoInputSummary(caps);
-  } else if (els.imageToVideoInputSummary) {
+  if (els.imageToVideoInputSummary) {
     els.imageToVideoInputSummary.textContent = '';
   }
 
@@ -4906,7 +4988,7 @@ function applyCreateFormRulesV2() {
       tips.push('Storyboard Prompt 只接收结构化文本分镜');
     } else if (intelligentMode && caps.supportsIntelligentStoryboard && taskType === 'text_to_video') {
       tips.push('智能分镜以 prompt + shot_type=intelligence 提交');
-    } else if (usesUnifiedPrimaryImage) {
+    } else if (isImageToVideo) {
       tips.push(canEndFrame ? '图生视频支持首帧与尾帧联动' : '图生视频需要首帧/输入图');
       if (caps.supportsImageToVideoReferenceImages) {
         tips.push(caps.supportsMultipleReferenceImages ? `支持附加参考图（最多 ${caps.maxReferenceImages || '多张'}）` : '支持附加参考图');
@@ -4961,13 +5043,24 @@ function renderAssets() {
     els.assetLibrary.innerHTML = state.assets.map((asset) => {
       const src = `/api/v1/assets/${asset.id}/content`;
       const isImage = asset.kind === 'image';
+      const isSource = selectedSourceAssetId === asset.id;
+      const isReference = selectedReferenceAssetIds.has(asset.id) || state.imageToVideoReferenceAssetOrder.includes(asset.id);
+      const isEnd = selectedEndFrameAssetId === asset.id;
+      const selectedFlags = []
+        .concat(isSource ? '<span class="asset-flag asset-flag-source">源图</span>' : [])
+        .concat(isReference ? '<span class="asset-flag asset-flag-reference">参考</span>' : [])
+        .concat(isEnd ? '<span class="asset-flag asset-flag-end">尾帧</span>' : [])
+        .join('');
       const preview = isImage
-        ? `<img src="${escapeAttr(src)}" alt="${escapeAttr(asset.originalName || asset.id)}" loading="lazy" />`
-        : `<div class="asset-meta">视频素材</div>`;
+        ? `<div class="asset-preview"><img src="${escapeAttr(src)}" alt="${escapeAttr(asset.originalName || asset.id)}" loading="lazy" /></div>`
+        : '<div class="asset-preview asset-preview-placeholder">视频素材</div>';
       return `
-      <article class="asset-card">
+      <article class="asset-card${isSource || isReference || isEnd ? ' asset-card-selected' : ''}">
         ${preview}
-        <div class="asset-meta">${escapeHtml(asset.originalName || asset.id)}</div>
+        <div class="asset-head">
+          <div class="asset-meta" title="${escapeAttr(asset.originalName || asset.id)}">${escapeHtml(asset.originalName || asset.id)}</div>
+          ${selectedFlags ? `<div class="asset-flags">${selectedFlags}</div>` : ''}
+        </div>
         <div class="asset-actions">
           <button type="button" class="secondary-button" data-action="use-source" data-id="${escapeAttr(asset.id)}">${activeTaskType === 'image_to_video' ? '设为第 1 张' : '设为源图'}</button>
           <button type="button" class="secondary-button" data-action="use-ref" data-id="${escapeAttr(asset.id)}">${activeTaskType === 'image_to_video' ? '加入附加图' : '设为参考图'}</button>
@@ -4990,8 +5083,6 @@ function renderAssets() {
   state.imageToVideoReferenceAssetOrder = state.imageToVideoReferenceAssetOrder.length
     ? state.imageToVideoReferenceAssetOrder.filter((id) => imageAssets.some((asset) => asset.id === id))
     : Array.from(selectedReferenceAssetIds);
-  state.imageToVideoInputSequence = getImageToVideoInputSequence().filter((item) => item.kind !== 'asset' || imageAssets.some((asset) => asset.id === item.value));
-  applyImageToVideoSequenceToLegacyState();
   applyImageToVideoAssetStateToForm();
   if (els.referenceAssetHelp) {
     const selectedCount = state.imageToVideoReferenceAssetOrder.length || Array.from(els.referenceAssetSelect?.selectedOptions || []).filter((option) => option.value).length;
@@ -5032,7 +5123,14 @@ function hasTaskPrimaryImage(input = {}) {
 }
 
 function hasTaskEndFrame(input = {}) {
-  return Boolean(String(input.endFrameImageUrl || '').trim() || String(input.endFrameAssetId || '').trim());
+  return Boolean(
+    String(input.endFrameImageUrl || '').trim()
+    || String(input.endFrameAssetId || '').trim()
+    || String(input.end_frame_image_url || '').trim()
+    || String(input.end_frame_image_data_url || '').trim()
+    || String(input.endFrameImage || '').trim()
+    || String(input.end_frame_image || '').trim()
+  );
 }
 
 function getTaskVisualSubmissionSummary(task) {
@@ -5057,7 +5155,7 @@ function getTaskVisualSubmissionSummary(task) {
     if (caps.supportsImageToVideoEndFrame) {
       parts.push(endFrameReady ? '尾帧已提交' : '无尾帧');
     } else if (endFrameReady) {
-      parts.push('尾帧未提交');
+      parts.push('尾帧已填写（模型未生效）');
     }
     return parts.join(' / ');
   }
@@ -5125,7 +5223,7 @@ function getTaskPreviewTags(task) {
     if (caps.supportsImageToVideoEndFrame) {
       tags.push({ text: endFrameReady ? '尾帧已提交' : '无尾帧' });
     } else if (endFrameReady) {
-      tags.push({ text: '尾帧未提交', warning: true });
+      tags.push({ text: '尾帧已填写（模型未生效）', warning: true });
     }
   } else if (taskType === 'text_to_video') {
     if (caps.supportsTextToVideoReferenceImages) {
@@ -5181,6 +5279,7 @@ function renderTaskComparePanel() {
   els.taskCompareGrid.innerHTML = tasks.map((task, index) => {
     const model = String(task.input?.model || '-');
     const status = String(task.status || 'unknown');
+    const statusTone = normalizeStatusTone(status);
     const prompt = summarizeTaskPrompt(task);
     const visualSummary = getTaskVisualSubmissionSummary(task);
     const parameterSummary = getTaskParameterSummary(task);
@@ -5189,7 +5288,7 @@ function renderTaskComparePanel() {
       <article class="task-compare-card">
         <div class="task-compare-card-top">
           <strong>${index === 0 ? '对比 A' : '对比 B'}</strong>
-          <span class="pill">${escapeHtml(status)}</span>
+          <span class="pill status-${escapeAttr(statusTone)}">${escapeHtml(status)}</span>
         </div>
         <div class="task-compare-card-meta">${escapeHtml(getTaskLabel(task.type))} / ${escapeHtml(model)}</div>
         <div class="task-compare-tags">${tags.map((tag) => `<span class="task-compare-tag${tag.warning ? ' task-compare-tag-warning' : ''}">${escapeHtml(tag.text)}</span>`).join('')}</div>
@@ -5216,6 +5315,113 @@ function summarizeTaskMode(task) {
   return '';
 }
 
+function normalizeStatusTone(status) {
+  const normalized = String(status || '').toLowerCase();
+  if (['queued', 'pending'].includes(normalized)) return 'pending';
+  if (['processing', 'running'].includes(normalized)) return 'running';
+  if (['completed', 'succeeded', 'success'].includes(normalized)) return 'success';
+  if (['failed', 'canceled', 'cancelled'].includes(normalized)) return 'failed';
+  return 'running';
+}
+
+function updateTopRunningStatus() {
+  if (!els.topRunningCount || !els.topRunningBar) return;
+  const tasks = Array.isArray(state.tasks) ? state.tasks : [];
+  const total = tasks.length;
+  const running = tasks.filter((task) => normalizeStatusTone(task?.status) === 'running').length;
+  const percent = total > 0 ? Math.max(0, Math.min(100, Math.round((running / total) * 100))) : 0;
+  els.topRunningCount.textContent = `${running} / ${total}`;
+  els.topRunningBar.style.width = `${percent}%`;
+}
+
+function deriveConnectivityTone(snapshot = {}) {
+  const message = String(snapshot?.message || '').toLowerCase();
+  const endpointStatus = snapshot?.endpointStatus || {};
+  const modelsOk = endpointStatus?.models?.reachable !== false;
+  const imagesOk = endpointStatus?.images?.reachable !== false;
+  const videosOk = endpointStatus?.videos?.reachable !== false;
+  const generationReady = snapshot?.generationReady === true || (modelsOk && imagesOk && videosOk);
+  if (generationReady && !/delay|latency|proxy/i.test(message)) return 'good';
+  if (modelsOk || imagesOk || videosOk) return 'warn';
+  return 'bad';
+}
+
+function renderTopConnectivity() {
+  if (!els.topConnectivityDot || !els.topConnectivityLabel || !els.topConnectivityIndicator) return;
+  const snapshot = state.connectivitySnapshot;
+  if (!snapshot) {
+    els.topConnectivityDot.className = 'top-connectivity-dot status-unknown';
+    els.topConnectivityLabel.textContent = 'Connectivity: Unknown';
+    return;
+  }
+  const tone = deriveConnectivityTone(snapshot);
+  els.topConnectivityDot.className = `top-connectivity-dot status-${tone}`;
+  const provider = String(snapshot.provider || 'Provider').trim();
+  const conclusion = String(snapshot.message || (snapshot.generationReady ? 'Ready' : 'Unavailable')).trim();
+  els.topConnectivityLabel.textContent = `Connectivity: ${tone.toUpperCase()} · ${provider}`;
+  const details = [
+    `Provider: ${provider}`,
+    `Models: ${snapshot.modelsCount ?? '-'}`,
+    `Images: ${snapshot.endpointStatus?.images?.reachable ? 'Reachable' : 'Unreachable'}`,
+    `Videos: ${snapshot.endpointStatus?.videos?.reachable ? 'Reachable' : 'Unreachable'}`,
+    `Conclusion: ${conclusion}`
+  ];
+  els.topConnectivityIndicator.title = details.join('\n');
+}
+
+function startConnectivityPolling() {
+  if (state.connectivityPollTimer) {
+    clearInterval(state.connectivityPollTimer);
+    state.connectivityPollTimer = null;
+  }
+  state.connectivityPollTimer = setInterval(() => {
+    checkConnectivity({ silent: true }).catch((error) => {
+      writeLog('CONNECTIVITY_POLL_ERROR', { message: error.message });
+    });
+  }, 60 * 1000);
+}
+
+function syncTopConfigMirrorFromMain() {
+  const baseEl = document.getElementById('baseUrl');
+  const keyEl = document.getElementById('sora2ApiKey');
+  const proxyEl = document.getElementById('proxyUrl');
+  if (els.topBaseUrl && baseEl) els.topBaseUrl.value = String(baseEl.value || '');
+  if (els.topApiKey && keyEl) els.topApiKey.value = String(keyEl.value || '');
+  if (els.topProxyUrl && proxyEl) els.topProxyUrl.value = String(proxyEl.value || '');
+}
+
+function applyTopConfigToMain() {
+  const baseEl = document.getElementById('baseUrl');
+  const keyEl = document.getElementById('sora2ApiKey');
+  const proxyEl = document.getElementById('proxyUrl');
+  const setField = (el, value) => {
+    if (!el) return;
+    el.value = value;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  if (baseEl && els.topBaseUrl) setField(baseEl, String(els.topBaseUrl.value || '').trim());
+  if (proxyEl && els.topProxyUrl) setField(proxyEl, String(els.topProxyUrl.value || '').trim());
+  if (keyEl && els.topApiKey) setField(keyEl, String(els.topApiKey.value || '').trim());
+}
+
+function initTopConfigMirror() {
+  syncTopConfigMirrorFromMain();
+  const baseEl = document.getElementById('baseUrl');
+  const keyEl = document.getElementById('sora2ApiKey');
+  const proxyEl = document.getElementById('proxyUrl');
+  [baseEl, keyEl, proxyEl].forEach((el) => {
+    if (!el) return;
+    el.addEventListener('input', () => syncTopConfigMirrorFromMain());
+    el.addEventListener('change', () => syncTopConfigMirrorFromMain());
+  });
+  [els.topBaseUrl, els.topApiKey, els.topProxyUrl].forEach((el) => {
+    if (!el) return;
+    el.addEventListener('input', () => applyTopConfigToMain());
+    el.addEventListener('change', () => applyTopConfigToMain());
+  });
+}
+
 function taskProgress(status) {
   const normalized = String(status || '').toLowerCase();
   if (['completed', 'succeeded'].includes(normalized)) return 100;
@@ -5223,6 +5429,41 @@ function taskProgress(status) {
   if (normalized === 'processing' || normalized === 'running') return 60;
   if (normalized === 'queued' || normalized === 'pending') return 20;
   return 10;
+}
+
+function isGenericUpstreamFailure(text) {
+  const normalized = String(text || '').trim().toLowerCase();
+  return normalized === 'upstream task failed'
+    || normalized === 'task failed'
+    || normalized === 'upstream_error';
+}
+
+function formatTaskErrorMessage(task) {
+  const error = task?.error || null;
+  const raw = String(error?.message || '').trim();
+  if (!raw) return '';
+  if (!isGenericUpstreamFailure(raw)) return raw;
+
+  const providerCode = String(error?.providerCode || error?.code || '').trim();
+  if (providerCode && providerCode.toLowerCase() !== 'upstream_error') {
+    return `Upstream task failed (${providerCode}). Check debug terminal for provider details.`;
+  }
+
+  const input = task?.input || {};
+  const taskType = String(task?.type || '').trim();
+  const model = getTaskModelSnapshot(task);
+  const caps = getModelCapabilities(model, taskType);
+  const sameFrameAsset = String(input.sourceAssetId || '').trim()
+    && String(input.endFrameAssetId || '').trim()
+    && String(input.sourceAssetId || '').trim() === String(input.endFrameAssetId || '').trim();
+
+  if (taskType === 'image_to_video' && hasTaskEndFrame(input) && !caps.supportsImageToVideoEndFrame) {
+    return 'Upstream task failed. The selected model does not support end frame input.';
+  }
+  if (taskType === 'image_to_video' && sameFrameAsset) {
+    return 'Upstream task failed. First frame and end frame use the same asset; try different images.';
+  }
+  return 'Upstream task failed. Open debug terminal to inspect provider payload and reason.';
 }
 
 function renderTasks() {
@@ -5236,6 +5477,8 @@ function renderTasks() {
     const comparing = state.compareTaskIds.includes(task.id);
     const model = task.input?.model || '-';
     const status = task.status || 'unknown';
+    const statusTone = normalizeStatusTone(status);
+    const statusClass = statusTone === 'failed' ? ' task-status-failed' : '';
     const prompt = summarizeTaskPrompt(task);
     const mode = summarizeTaskMode(task);
     const visualSummary = getTaskVisualSubmissionSummary(task);
@@ -5243,12 +5486,13 @@ function renderTasks() {
     const taskTags = getTaskPreviewTags(task).slice(0, 5);
     const percent = taskProgress(status);
     const localCount = Array.isArray(task.savedAssets) ? task.savedAssets.length : 0;
-    const errorText = task.error?.message ? `<div class="task-error">${escapeHtml(task.error.message)}</div>` : '';
+    const formattedError = formatTaskErrorMessage(task);
+    const errorText = formattedError ? `<div class="task-error">${escapeHtml(formattedError)}</div>` : '';
     return `
-      <article class="task${activeClass}" data-task-id="${escapeAttr(task.id)}">
+      <article class="task${activeClass}${statusClass}" data-task-id="${escapeAttr(task.id)}">
         <div class="task-top">
           <strong>${escapeHtml(getTaskLabel(task.type))}</strong>
-          <span class="pill">${escapeHtml(status)}</span>
+          <span class="pill status-${escapeAttr(statusTone)}">${escapeHtml(status)}</span>
         </div>
         <div class="task-progress"><div class="task-progress-bar" style="width:${percent}%"></div></div>
         <div>模型：${escapeHtml(model)}${mode ? ` / ${escapeHtml(mode)}` : ''}</div>
@@ -5522,11 +5766,16 @@ async function deleteActiveProfile() {
   setStatus('已删除当前档案。');
 }
 
-async function checkConnectivity() {
-  els.connectivityStatus.textContent = '检测中...';
+async function checkConnectivity(options = {}) {
+  const { silent = false } = options;
+  if (!silent && els.connectivityStatus) {
+    els.connectivityStatus.textContent = '检测中...';
+  }
   try {
     const data = await api('/api/v1/connectivity', { timeoutMs: 120000 });
     const c = data.connectivity || {};
+    state.connectivitySnapshot = c;
+    renderTopConnectivity();
     const lines = [
       `提供商：${c.provider || '-'}`,
       `模型数：${c.modelsCount ?? '-'}`,
@@ -5534,9 +5783,15 @@ async function checkConnectivity() {
       `视频接口：${c.endpointStatus?.videos?.reachable ? '可达' : '不可达'}`,
       `结论：${c.message || (c.generationReady ? '可用' : '不可用')}`
     ];
-    els.connectivityStatus.textContent = lines.join('\n');
+    if (!silent && els.connectivityStatus) {
+      els.connectivityStatus.textContent = lines.join('\n');
+    }
   } catch (error) {
-    els.connectivityStatus.textContent = `检测失败\n${error.message}`;
+    state.connectivitySnapshot = { message: error.message, endpointStatus: {} };
+    renderTopConnectivity();
+    if (!silent && els.connectivityStatus) {
+      els.connectivityStatus.textContent = `检测失败\n${error.message}`;
+    }
   }
 }
 
@@ -5675,6 +5930,7 @@ async function loadTasks(silent = false) {
     state.selectedTaskId = '';
   }
   renderTasks();
+  updateTopRunningStatus();
   updateCalmPanel();
   restartAutoRefresh();
   if (!silent && state.selectedTaskId) {
@@ -5720,18 +5976,13 @@ async function uploadImageInput(fileInput, targetSelect) {
   }
   await loadAssets();
   fileInput.value = '';
-  if (String(els.typeSelect?.value || '') === 'image_to_video' && targetSelect !== els.endFrameAssetSelect) {
-    const sequenceItems = uploadedAssetIds.map((id) => ({ kind: 'asset', value: id }));
-    if (targetSelect === els.sourceAssetSelect) {
-      appendImageToVideoInputSequence(sequenceItems, 'replace-primary');
-    } else {
-      appendImageToVideoInputSequence(sequenceItems);
-    }
-  } else if (targetSelect?.multiple) {
+  if (targetSelect?.multiple) {
     appendImageToVideoReferenceAssets(uploadedAssetIds);
   } else if (targetSelect) {
     targetSelect.value = uploadedAssetIds[0] || state.assets[0]?.id || '';
-    state.imageToVideoSourceAssetId = String(targetSelect.value || '').trim();
+    if (targetSelect === els.sourceAssetSelect) {
+      state.imageToVideoSourceAssetId = String(targetSelect.value || '').trim();
+    }
   }
   refreshImageToVideoInputSummaryFromCurrentSelection();
 }
@@ -5741,37 +5992,15 @@ function getCreatePayload() {
   const type = String(fd.get('type') || '');
   const model = state.modelById.get(selectedModelIdForTask(type)) || null;
   const caps = getModelCapabilities(model, type);
-  if (type === 'image_to_video') ensureImageToVideoSequenceState();
-  const sequenceSummary = type === 'image_to_video' ? getImageToVideoInputSequenceSummary() : null;
-  const sourceImageUrlValue = type === 'image_to_video'
-    ? String(sequenceSummary?.primary?.kind === 'url' ? sequenceSummary.primary.value : '').trim()
-    : String(fd.get('sourceImageUrl') || '').trim();
-  const sourceAssetIdValue = type === 'image_to_video'
-    ? String(sequenceSummary?.primary?.kind === 'asset' ? sequenceSummary.primary.value : '').trim()
-    : String(fd.get('sourceAssetId') || '').trim();
-  const referenceImageUrls = type === 'image_to_video'
-    ? sequenceSummary.referenceItems.filter((item) => item.kind === 'url').map((item) => item.value)
-    : String(fd.get('referenceImageUrl') || '')
-      .split(/\r?\n|,/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-  const referenceAssetIds = (type === 'image_to_video'
-    ? sequenceSummary.referenceItems.filter((item) => item.kind === 'asset').map((item) => item.value)
-    : fd.getAll('referenceAssetId'))
+  const sourceImageUrlValue = String(fd.get('sourceImageUrl') || '').trim();
+  const sourceAssetIdValue = String(fd.get('sourceAssetId') || '').trim();
+  const referenceImageUrls = String(fd.get('referenceImageUrl') || '')
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const referenceAssetIds = fd.getAll('referenceAssetId')
     .map((item) => String(item || '').trim())
     .filter(Boolean);
-  const useReferenceAsPrimaryInput = type === 'image_to_video' && !caps.supportsSourceImage && caps.supportsImageToVideoFirstFrame;
-  let imageToVideoPrimaryImageUrl = sourceImageUrlValue;
-  let imageToVideoPrimaryAssetId = sourceAssetIdValue;
-  const imageToVideoReferenceImageUrls = [...referenceImageUrls];
-  const imageToVideoReferenceAssetIds = [...referenceAssetIds];
-  if (type === 'image_to_video' && !imageToVideoPrimaryImageUrl && !imageToVideoPrimaryAssetId) {
-    if (imageToVideoReferenceImageUrls.length) {
-      imageToVideoPrimaryImageUrl = imageToVideoReferenceImageUrls.shift();
-    } else if (imageToVideoReferenceAssetIds.length) {
-      imageToVideoPrimaryAssetId = imageToVideoReferenceAssetIds.shift();
-    }
-  }
   const videoGenerationMode = String(fd.get('videoGenerationMode') || 'standard').trim() || 'standard';
   const storyboardText = String(fd.get('storyboardText') || '').trim();
   const omniImageUrls = String(fd.get('omniImageUrls') || '').split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
@@ -5798,28 +6027,12 @@ function getCreatePayload() {
     imageSize: String(fd.get('imageSize') || '').trim(),
     aspectRatio: String(fd.get('aspectRatio') || '').trim(),
     duration: fd.get('duration') ? Number(fd.get('duration')) : undefined,
-    sourceImageUrl: type === 'image_to_video' ? (useReferenceAsPrimaryInput ? '' : imageToVideoPrimaryImageUrl) : sourceImageUrlValue,
-    sourceAssetId: type === 'image_to_video' ? (useReferenceAsPrimaryInput ? '' : imageToVideoPrimaryAssetId) : sourceAssetIdValue,
-    referenceImageUrl: type === 'image_to_video'
-      ? (
-          caps.supportsMultipleReferenceImages
-            ? (useReferenceAsPrimaryInput ? imageToVideoPrimaryImageUrl : '')
-            : (useReferenceAsPrimaryInput ? imageToVideoPrimaryImageUrl : (imageToVideoReferenceImageUrls[0] || ''))
-        )
-      : (caps.supportsMultipleReferenceImages ? '' : (referenceImageUrls[0] || '')),
-    referenceImageUrls: type === 'image_to_video'
-      ? (caps.supportsMultipleReferenceImages ? imageToVideoReferenceImageUrls : undefined)
-      : (caps.supportsMultipleReferenceImages ? referenceImageUrls : undefined),
-    referenceAssetId: type === 'image_to_video'
-      ? (
-          caps.supportsMultipleReferenceImages
-            ? (useReferenceAsPrimaryInput ? imageToVideoPrimaryAssetId : '')
-            : (useReferenceAsPrimaryInput ? imageToVideoPrimaryAssetId : (imageToVideoReferenceAssetIds[0] || ''))
-        )
-      : (caps.supportsMultipleReferenceImages ? '' : (referenceAssetIds[0] || '')),
-    referenceAssetIds: type === 'image_to_video'
-      ? (caps.supportsMultipleReferenceImages ? imageToVideoReferenceAssetIds : undefined)
-      : (caps.supportsMultipleReferenceImages ? referenceAssetIds : undefined),
+    sourceImageUrl: sourceImageUrlValue,
+    sourceAssetId: sourceAssetIdValue,
+    referenceImageUrl: caps.supportsMultipleReferenceImages ? '' : (referenceImageUrls[0] || ''),
+    referenceImageUrls: caps.supportsMultipleReferenceImages ? referenceImageUrls : undefined,
+    referenceAssetId: caps.supportsMultipleReferenceImages ? '' : (referenceAssetIds[0] || ''),
+    referenceAssetIds: caps.supportsMultipleReferenceImages ? referenceAssetIds : undefined,
     endFrameImageUrl: String(fd.get('endFrameImageUrl') || '').trim(),
     endFrameAssetId: String(fd.get('endFrameAssetId') || '').trim(),
     imageCount: fd.get('imageCount') ? Number(fd.get('imageCount')) : undefined,
@@ -5928,8 +6141,24 @@ function getCreatePayload() {
   if (caps.maxReferenceImages && referenceCount > caps.maxReferenceImages) {
     throw new Error(`当前模型最多支持 ${caps.maxReferenceImages} 张参考图。`);
   }
-  if (type === 'image_to_video' && !payload.sourceImageUrl && !payload.sourceAssetId && !referenceCount) {
-    throw new Error('图生视频必须提供一张输入图片，尾帧图是可选项。');
+  if (type === 'image_to_video' && !payload.sourceImageUrl && !payload.sourceAssetId) {
+    throw new Error('图生视频必须单独提供首帧图片（URL 或本地素材）。');
+  }
+  if (
+    type === 'image_to_video'
+    && payload.endFrameAssetId
+    && payload.sourceAssetId
+    && payload.endFrameAssetId === payload.sourceAssetId
+  ) {
+    throw new Error('首帧图与尾帧图不能是同一张，请更换尾帧后再提交。');
+  }
+  if (
+    type === 'image_to_video'
+    && payload.endFrameImageUrl
+    && payload.sourceImageUrl
+    && payload.endFrameImageUrl === payload.sourceImageUrl
+  ) {
+    throw new Error('首帧图与尾帧图不能是同一张，请更换尾帧后再提交。');
   }
   if (type === 'image_edit' && !payload.sourceImageUrl && !payload.sourceAssetId) {
     throw new Error('图片编辑需要提供源图片，请填写图片 URL 或选择本地图片。');
@@ -5992,6 +6221,7 @@ function getCreatePayload() {
 
 async function submitTask() {
   const payload = getCreatePayload();
+  writeLog('TASK_SUBMIT', { type: payload.type, model: payload.model, studioTaskId: payload.studioTaskId || null });
   const task = await api('/api/v1/tasks', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -6141,61 +6371,43 @@ async function reuseTaskInput(taskId) {
     else reuseWarnings.push('时长未恢复');
   }
 
+  setImageToVideoInputSequence([]);
+  setIfPresent(els.sourceImageUrl, input.sourceImageUrl || '');
+  setIfPresent(els.sourceAssetSelect, input.sourceAssetId || '');
+  const referenceAssetIds = Array.isArray(input.referenceAssetIds)
+    ? input.referenceAssetIds.map((item) => String(item).trim()).filter(Boolean)
+    : [String(input.referenceAssetId || '').trim()].filter(Boolean);
+  const referenceImageUrls = Array.isArray(input.referenceImageUrls)
+    ? input.referenceImageUrls
+    : String(input.referenceImageUrl || '')
+      .split(/\r?\n|,/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  setIfPresent(els.referenceImageUrl, referenceImageUrls.join('\n'));
+  if (els.referenceAssetSelect?.multiple) {
+    const selected = new Set(referenceAssetIds);
+    Array.from(els.referenceAssetSelect.options || []).forEach((option) => {
+      option.selected = selected.has(option.value);
+    });
+  } else {
+    setIfPresent(els.referenceAssetSelect, referenceAssetIds[0] || '');
+  }
+  setIfPresent(els.endFrameImageUrl, input.endFrameImageUrl || '');
+  setIfPresent(els.endFrameAssetSelect, input.endFrameAssetId || '');
   if (taskType === 'image_to_video') {
-    const sequence = [];
-    if (String(input.sourceAssetId || '').trim()) sequence.push({ kind: 'asset', value: String(input.sourceAssetId).trim() });
-    else if (String(input.sourceImageUrl || '').trim()) sequence.push({ kind: 'url', value: String(input.sourceImageUrl).trim() });
-
-    const referenceAssetIds = Array.isArray(input.referenceAssetIds)
-      ? input.referenceAssetIds
-      : [String(input.referenceAssetId || '').trim()].filter(Boolean);
-    const referenceImageUrls = Array.isArray(input.referenceImageUrls)
-      ? input.referenceImageUrls
-      : String(input.referenceImageUrl || '')
-        .split(/\r?\n|,/)
-        .map((item) => item.trim())
-        .filter(Boolean);
-
-    referenceAssetIds.forEach((id) => sequence.push({ kind: 'asset', value: String(id).trim() }));
-    referenceImageUrls.forEach((url) => sequence.push({ kind: 'url', value: String(url).trim() }));
-    const allowsRefs = Boolean(appliedCaps.supportsImageToVideoReferenceImages);
-    setImageToVideoInputSequence(allowsRefs ? sequence : sequence.slice(0, 1));
-    setIfPresent(els.endFrameImageUrl, input.endFrameImageUrl || '');
-    setIfPresent(els.endFrameAssetSelect, input.endFrameAssetId || '');
-    if (sequence.length) reuseTags.push({ text: '首帧已复用' });
+    if (String(input.sourceImageUrl || '').trim() || String(input.sourceAssetId || '').trim()) {
+      reuseTags.push({ text: '首帧已复用' });
+    } else {
+      reuseWarnings.push('首帧未恢复');
+    }
     if (referenceAssetIds.length || referenceImageUrls.length) {
-      if (allowsRefs) reuseTags.push({ text: `参考图 ${referenceAssetIds.length + referenceImageUrls.length} 张` });
+      if (appliedCaps.supportsImageToVideoReferenceImages) reuseTags.push({ text: `参考图 ${referenceAssetIds.length + referenceImageUrls.length} 张` });
       else reuseWarnings.push('参考图未恢复');
     }
     if (String(input.endFrameImageUrl || '').trim() || String(input.endFrameAssetId || '').trim()) {
       if (appliedCaps.supportsImageToVideoEndFrame) reuseTags.push({ text: '尾帧已复用' });
       else reuseWarnings.push('尾帧未恢复');
     }
-    refreshImageToVideoInputSummaryFromCurrentSelection();
-  } else {
-    setImageToVideoInputSequence([]);
-    setIfPresent(els.sourceImageUrl, input.sourceImageUrl || '');
-    setIfPresent(els.sourceAssetSelect, input.sourceAssetId || '');
-    const referenceAssetIds = Array.isArray(input.referenceAssetIds)
-      ? input.referenceAssetIds.map((item) => String(item).trim()).filter(Boolean)
-      : [String(input.referenceAssetId || '').trim()].filter(Boolean);
-    const referenceImageUrls = Array.isArray(input.referenceImageUrls)
-      ? input.referenceImageUrls
-      : String(input.referenceImageUrl || '')
-        .split(/\r?\n|,/)
-        .map((item) => item.trim())
-        .filter(Boolean);
-    setIfPresent(els.referenceImageUrl, referenceImageUrls.join('\n'));
-    if (els.referenceAssetSelect?.multiple) {
-      const selected = new Set(referenceAssetIds);
-      Array.from(els.referenceAssetSelect.options || []).forEach((option) => {
-        option.selected = selected.has(option.value);
-      });
-    } else {
-      setIfPresent(els.referenceAssetSelect, referenceAssetIds[0] || '');
-    }
-    setIfPresent(els.endFrameImageUrl, input.endFrameImageUrl || '');
-    setIfPresent(els.endFrameAssetSelect, input.endFrameAssetId || '');
   }
 
   syncImageToVideoAssetStateFromForm();
@@ -6260,21 +6472,16 @@ async function taskAction(action, id) {
 }
 
 async function assetAction(action, id) {
-  const taskType = String(els.typeSelect?.value || '');
   if (action === 'delete-asset') {
     await api(`/api/v1/assets/${id}`, { method: 'DELETE' });
     await loadAssets();
     return;
   }
-  if (taskType === 'image_to_video' && action === 'use-source') {
-    appendImageToVideoInputSequence([{ kind: 'asset', value: id }], 'replace-primary');
-  } else if (action === 'use-source') {
+  if (action === 'use-source') {
     els.sourceAssetSelect.value = id;
     state.imageToVideoSourceAssetId = String(id || '').trim();
   }
-  if (taskType === 'image_to_video' && action === 'use-ref') {
-    appendImageToVideoInputSequence([{ kind: 'asset', value: id }]);
-  } else if (action === 'use-ref') {
+  if (action === 'use-ref') {
     if (els.referenceAssetSelect?.multiple) {
       appendImageToVideoReferenceAssets([id]);
     } else if (els.referenceAssetSelect) {
@@ -6335,6 +6542,12 @@ function bindEvents() {
   els.runDiagnostics.addEventListener('click', () => {
     runDiagnostics().catch((error) => alert(error.message));
   });
+  els.topConnectivityIndicator?.addEventListener('click', () => {
+    runDiagnostics().catch((error) => alert(error.message));
+  });
+  els.topRunDiagnostics?.addEventListener('click', () => {
+    runDiagnostics().catch((error) => alert(error.message));
+  });
   els.loadModels.addEventListener('click', () => {
     loadModelsV2().catch((error) => {
       setModelSyncUI({
@@ -6388,11 +6601,13 @@ function bindEvents() {
   });
 
   els.imageModel.addEventListener('change', () => {
+    if (!String(currentTaskType() || '').includes('video')) rememberModelSelection(currentTaskType());
     renderModelPanel();
     applyCreateFormRulesV2();
     persistUiState();
   });
   els.videoModel.addEventListener('change', () => {
+    if (String(currentTaskType() || '').includes('video')) rememberModelSelection(currentTaskType());
     renderModelPanel();
     applyCreateFormRulesV2();
     persistUiState();
@@ -6645,6 +6860,14 @@ function bindEvents() {
       return;
     }
     if (key) {
+      if (action === 'sequence-set-end') {
+        const sequence = getImageToVideoInputSequence();
+        const item = sequence.find((entry) => sequenceKeyForImageToVideoItem(entry) === key);
+        if (item) {
+          setImageToVideoEndFrameFromSequenceItem(item);
+          applyCreateFormRulesV2();
+        }
+      }
       if (action === 'sequence-promote') updateImageToVideoInputSequenceItem('promote', key);
       if (action === 'sequence-move-up') updateImageToVideoInputSequenceItem('move-up', key);
       if (action === 'sequence-move-down') updateImageToVideoInputSequenceItem('move-down', key);
@@ -7272,8 +7495,13 @@ async function init() {
     }
 
     await Promise.all([loadProfiles(), loadRuntimeConfig(), loadStudioTasks()]);
+    initTopConfigMirror();
     restoreUiPreferences();
     await Promise.all([loadAssets(), loadTasks(true)]);
+    updateTopRunningStatus();
+    renderTopConnectivity();
+    checkConnectivity({ silent: true }).catch(() => {});
+    startConnectivityPolling();
     restoreCreateDraft();
     ensureImageToVideoSequenceState();
     applyCreateFormRulesV2();

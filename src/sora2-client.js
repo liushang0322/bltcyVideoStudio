@@ -393,7 +393,61 @@ function summarizeVideoRequest(body, format) {
     images_count: Array.isArray(body?.images) ? body.images.length : (body?.images ? 1 : 0),
     has_input_reference: inputReference !== undefined,
     input_reference_type: inputReferenceType,
-    has_end_frame_image: Boolean(body?.end_frame_image)
+    has_end_frame_image: Boolean(body?.end_frame_image),
+    end_frame_strategy: body?.end_frame_image
+      ? 'dedicated_field'
+      : ((Array.isArray(body?.images) && body.images.length > 1) ? 'images_array' : 'none')
+  };
+}
+
+function firstNonEmptyText(candidates = []) {
+  for (const candidate of candidates) {
+    const text = typeof candidate === 'string'
+      ? candidate.trim()
+      : (candidate == null ? '' : String(candidate).trim());
+    if (text) return text;
+  }
+  return '';
+}
+
+function dedupeImageValues(values = []) {
+  const deduped = [];
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (!text) continue;
+    if (!deduped.includes(text)) deduped.push(text);
+  }
+  return deduped;
+}
+
+function normalizeProviderTaskError(data) {
+  const nestedError = data?.error;
+  const nestedData = data?.data;
+  const message = firstNonEmptyText([
+    nestedError?.message,
+    nestedData?.error?.message,
+    nestedData?.task_status_msg,
+    nestedData?.task_status_message,
+    nestedData?.status_message,
+    nestedData?.reason,
+    data?.task_status_msg,
+    data?.task_status_message,
+    data?.status_message,
+    data?.reason,
+    data?.message
+  ]) || 'Upstream task failed';
+  const providerCode = firstNonEmptyText([
+    nestedError?.code,
+    nestedData?.error?.code,
+    nestedData?.code,
+    data?.code
+  ]) || null;
+
+  return {
+    message,
+    code: providerCode ? 'UPSTREAM_TASK_FAILED' : 'UPSTREAM_ERROR',
+    providerCode,
+    details: data
   };
 }
 
@@ -419,9 +473,7 @@ function normalizeProviderVideoTaskResponse(data, providerMeta = null) {
     task_id: taskId,
     status: normalizedStatus,
     output: videoUrl ? { video_url: videoUrl, url: videoUrl } : null,
-    error: normalizedStatus === 'failed'
-      ? { message: data?.message || data?.data?.task_status_msg || 'Upstream task failed' }
-      : null,
+    error: normalizedStatus === 'failed' ? normalizeProviderTaskError(data) : null,
     providerMeta
   };
 }
@@ -828,6 +880,7 @@ export async function createVideoTask(payload) {
   const taskCapability = catalogEntry?.taskCapabilities?.[payload.type] || catalogEntry?.capabilities || {};
   const modelId = String(payload.model || '').trim().toLowerCase();
   const isKlingVideo = /^kling-video/.test(modelId);
+  const isVeoVideo = /^veo/.test(modelId);
   const sizeField = String(taskCapability.sizeField || 'size');
   const resolutionValue = String(payload.size || payload.resolution || '').trim();
   const imageSizeValue = String(payload.image_size || '').trim();
@@ -908,7 +961,15 @@ export async function createVideoTask(payload) {
     .concat(sourceImage ? [sourceImage] : [])
     .concat(referenceImages)
     .filter(Boolean);
+  const dedupedInputImages = dedupeImageValues(allInputImages);
   const shouldUseImagesArray = payload.type === 'image_to_video' && Boolean(primaryImage);
+  const prefersDedicatedEndFrameField = Boolean(
+    payload.type === 'image_to_video'
+    && shouldUseImagesArray
+    && isVeoVideo
+    && taskCapability.supportsEndFrame === true
+    && endFrameImage
+  );
   const modelRequestFormat = taskCapability.requestFormat || catalogEntry?.capabilities?.requestFormat || '';
   const modelInputReferenceFormat = taskCapability.inputReferenceFormat || catalogEntry?.capabilities?.inputReferenceFormat || '';
   const shouldUseMultipart = (modelRequestFormat || runtimeConfig.videoRequestFormat) === 'multipart';
@@ -917,16 +978,17 @@ export async function createVideoTask(payload) {
   const alternateInputReferenceFormat = initialInputReferenceFormat === 'string' ? 'object' : 'string';
   const initialInputReference = buildInputReference(sourceImage, referenceImages, initialInputReferenceFormat);
   if (shouldUseImagesArray) {
-    body.images = allInputImages.length ? allInputImages : [primaryImage];
-    if (taskCapability.supportsEndFrame === true && endFrameImage) {
-      body.images.push(endFrameImage);
+    body.images = dedupedInputImages.length ? dedupedInputImages : [primaryImage];
+    if (taskCapability.supportsEndFrame === true && endFrameImage && !prefersDedicatedEndFrameField) {
+      const normalizedEndFrame = String(endFrameImage || '').trim();
+      if (normalizedEndFrame && !body.images.includes(normalizedEndFrame)) body.images.push(normalizedEndFrame);
     }
   } else if (taskCapability.supportsReferenceImage !== false && initialInputReference !== undefined) {
     body.input_reference = shouldUploadReferenceAsField
       ? (taskCapability.supportsMultipleReferenceImages ? [sourceImage, ...referenceImages].filter(Boolean) : (sourceImage || referenceImages[0]))
       : initialInputReference;
   }
-  if (!shouldUseImagesArray && taskCapability.supportsEndFrame !== false && endFrameImage) {
+  if ((prefersDedicatedEndFrameField || !shouldUseImagesArray) && taskCapability.supportsEndFrame !== false && endFrameImage) {
     body.end_frame_image = endFrameImage;
   }
 
@@ -1004,12 +1066,16 @@ export async function createVideoTask(payload) {
       providerCode: error.providerCode || '',
       details: error.payload || null
     });
+    const lowerErrorText = errorText.toLowerCase();
     const shouldRetryMultipart = error.code === 'OPENAI_HTTP_ERROR'
       && (
         errorText.includes('Unsupported content type: application/json')
         || errorText.includes('failed to parse multipart form')
         || error.providerCode === 'build_request_failed'
       );
+    const shouldRetryWithoutDedicatedEndFrame = error.code === 'OPENAI_HTTP_ERROR'
+      && Boolean(body.end_frame_image)
+      && lowerErrorText.includes('end_frame');
     const shouldRetryInputReference = error.code === 'OPENAI_HTTP_ERROR'
       && (sourceImage || referenceImages.length > 0)
       && errorText.includes('input_reference')
@@ -1023,6 +1089,14 @@ export async function createVideoTask(payload) {
 
     if (shouldRetryMultipart) {
       return normalizeProviderVideoTaskResponse(await requestWithFormat('multipart'), providerMeta);
+    }
+    if (shouldRetryWithoutDedicatedEndFrame) {
+      const normalizedEndFrame = String(body.end_frame_image || '').trim();
+      delete body.end_frame_image;
+      if (normalizedEndFrame && Array.isArray(body.images) && !body.images.includes(normalizedEndFrame)) {
+        body.images.push(normalizedEndFrame);
+      }
+      return normalizeProviderVideoTaskResponse(await requestWithFormat(shouldUseMultipart ? 'multipart' : 'json'), providerMeta);
     }
     if (!shouldRetryInputReference) throw error;
 
