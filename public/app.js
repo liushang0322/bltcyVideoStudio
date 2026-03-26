@@ -773,6 +773,7 @@ function normalizeUserErrorMessage(error, fallback = '操作失败，请稍后�
   const raw = String(error?.message || '').trim();
   if (error?.code === 'NO_MODELS_FOR_TASK_TYPE') return '当前任务类型没有可用模型，请先加载模型或切换任务类型。';
   if (error?.code === 'TIMEOUT') return '请求超时，请稍后重试。';
+  if (error?.code === 'FRAME_BINDING_STRICT_UNSUPPORTED') return '当前接口不接受 strict 首尾帧字段，已拦截弱约束回退。请检查上游接口版本，或切到兼容模式。';
   if (raw.includes('requires a dedicated first-frame image')) return '图生视频需要单独提供首帧图（URL 或本地素材）。';
   if (raw.includes('first frame and end frame must be different images')) return '首帧图与尾帧图不能是同一张，请更换尾帧后再提交。';
   if (!raw) return fallback;
@@ -867,20 +868,49 @@ function isTierSizeModel(taskType, model, caps) {
   return explicitImageTier || videoTierOnly;
 }
 
+function parseAspectRatioValue(value) {
+  const match = String(value || '').trim().match(/^(\d{1,2}):(\d{1,2})$/);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  return { width, height, value: width / height };
+}
+
+function isAspectRatioWithinRange(value, { min = 1 / 8, max = 8 } = {}) {
+  const parsed = parseAspectRatioValue(value);
+  if (!parsed) return true;
+  return parsed.value >= min && parsed.value <= max;
+}
+
+function isVeo31ModelId(modelId) {
+  return /^veo3\.1(?:$|[-_.])/i.test(String(modelId || '').trim());
+}
+
+function normalizeVeoImageSizeKeyword(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (!normalized) return '';
+  if (normalized === '512' || normalized === '512PX') return '512px';
+  if (normalized === '1K' || normalized === '2K' || normalized === '4K') return normalized;
+  return '';
+}
+
 function deriveResolutionFromTierAndAspectRatio(tier, aspectRatio) {
   const normalizedTier = String(tier || '').trim().toUpperCase();
   const ratio = String(aspectRatio || '').trim() || '1:1';
   const baseByTier = {
     '1K': 720,
+    '512PX': 512,
     '2K': 1440,
     '4K': 2160
   };
   const base = baseByTier[normalizedTier];
   if (!base) return '';
-  if (ratio === '16:9') return `${Math.round(base * 16 / 9)}x${base}`;
-  if (ratio === '9:16') return `${base}x${Math.round(base * 16 / 9)}`;
-  if (ratio === '4:3') return `${Math.round(base * 4 / 3)}x${base}`;
-  if (ratio === '3:4') return `${base}x${Math.round(base * 4 / 3)}`;
+  const parsed = parseAspectRatioValue(ratio);
+  if (parsed) {
+    if (parsed.value >= 1) return `${Math.round(base * parsed.value)}x${base}`;
+    return `${base}x${Math.round(base / parsed.value)}`;
+  }
   return `${base}x${base}`;
 }
 
@@ -890,20 +920,9 @@ function resolutionMatchesAspectRatio(resolution, aspectRatio) {
   const width = Number(match[1]);
   const height = Number(match[2]);
   if (!width || !height) return false;
-  switch (String(aspectRatio || '').trim()) {
-    case '16:9':
-      return width > height;
-    case '9:16':
-      return height > width;
-    case '1:1':
-      return width === height;
-    case '4:3':
-      return width > height && Math.abs(width / height - 4 / 3) < 0.05;
-    case '3:4':
-      return height > width && Math.abs(width / height - 3 / 4) < 0.05;
-    default:
-      return true;
-  }
+  const parsed = parseAspectRatioValue(aspectRatio);
+  if (!parsed) return true;
+  return Math.abs((width / height) - parsed.value) < 0.05;
 }
 
 async function renderSelectOptionsChunked(selectEl, models, { limit = null, chunkSize = 40 } = {}) {
@@ -5138,6 +5157,8 @@ function getTaskVisualSubmissionSummary(task) {
   const taskType = String(task?.type || '').trim();
   const model = getTaskModelSnapshot(task);
   const caps = getModelCapabilities(model, taskType);
+  const modelId = String(input.model || model?.id || '').trim().toLowerCase();
+  const frameBindingMode = String(input.frameBindingMode || input.frame_binding_mode || '').trim().toLowerCase();
   const family = getBridgeVideoModelFamilyLabel(model);
   const referenceCount = countTaskInputReferences(input);
   const primaryReady = hasTaskPrimaryImage(input);
@@ -5146,6 +5167,9 @@ function getTaskVisualSubmissionSummary(task) {
 
   if (taskType === 'image_to_video') {
     parts.push(`${family}`);
+    if (isVeo31ModelId(modelId) && (frameBindingMode === 'strict' || !frameBindingMode)) {
+      parts.push('首尾帧强绑定');
+    }
     parts.push(primaryReady ? '第 1 张已提交' : '缺第 1 张');
     if (caps.supportsImageToVideoReferenceImages) {
       parts.push(referenceCount ? `参考图 ${referenceCount} 张` : '无参考图');
@@ -5200,6 +5224,8 @@ function getTaskPreviewTags(task) {
   const input = task?.input || {};
   const taskType = String(task?.type || '').trim();
   const model = getTaskModelSnapshot(task);
+  const modelId = String(input.model || model?.id || '').trim().toLowerCase();
+  const frameBindingMode = String(input.frameBindingMode || input.frame_binding_mode || '').trim().toLowerCase();
   const caps = getModelCapabilities(model, taskType);
   const family = getBridgeVideoModelFamilyLabel(model);
   const referenceCount = countTaskInputReferences(input);
@@ -5214,6 +5240,9 @@ function getTaskPreviewTags(task) {
   if (input.duration != null && String(input.duration).trim()) tags.push({ text: `${input.duration}s` });
 
   if (taskType === 'image_to_video') {
+    if (isVeo31ModelId(modelId) && (frameBindingMode === 'strict' || !frameBindingMode)) {
+      tags.push({ text: '首尾帧强绑定' });
+    }
     tags.push({ text: primaryReady ? '首帧已提交' : '缺首帧', warning: !primaryReady });
     if (caps.supportsImageToVideoReferenceImages) {
       tags.push({ text: referenceCount ? `参考图 ${referenceCount} 张` : '无参考图' });
@@ -5991,6 +6020,8 @@ function getCreatePayload() {
   const fd = new FormData(els.createForm);
   const type = String(fd.get('type') || '');
   const model = state.modelById.get(selectedModelIdForTask(type)) || null;
+  const modelId = String(model?.id || selectedModelIdForTask(type) || '').trim().toLowerCase();
+  const isVeo31Video = type.includes('video') && isVeo31ModelId(modelId);
   const caps = getModelCapabilities(model, type);
   const sourceImageUrlValue = String(fd.get('sourceImageUrl') || '').trim();
   const sourceAssetIdValue = String(fd.get('sourceAssetId') || '').trim();
@@ -6040,16 +6071,27 @@ function getCreatePayload() {
     seed: fd.get('seed') ? Number(fd.get('seed')) : undefined,
     styleStrength: fd.get('styleStrength') ? Number(fd.get('styleStrength')) : undefined
   };
+  if (type === 'image_to_video' && isVeo31ModelId(modelId)) {
+    payload.frameBindingMode = 'strict';
+  }
 
   if (caps.promptMaxLength && payload.prompt && payload.prompt.length > caps.promptMaxLength) {
     throw new Error(`当前模型提示词长度不能超过 ${caps.promptMaxLength} 字。`);
   }
 
-  if (caps.allowCustomResolution === false && payload.imageSize && !payload.resolution) {
-    payload.resolution = payload.imageSize;
-  }
-  if (type.includes('video') && isTierSizeModel(type, model, caps) && payload.imageSize) {
-    payload.resolution = deriveResolutionFromTierAndAspectRatio(payload.imageSize, payload.aspectRatio || caps.defaultAspectRatio);
+  if (isVeo31Video) {
+    const normalizedTier = normalizeVeoImageSizeKeyword(payload.imageSize || payload.resolution);
+    if (normalizedTier) payload.imageSize = normalizedTier;
+    if (normalizeVeoImageSizeKeyword(payload.resolution) && !/^\d{3,5}x\d{3,5}$/i.test(payload.resolution)) {
+      delete payload.resolution;
+    }
+  } else {
+    if (caps.allowCustomResolution === false && payload.imageSize && !payload.resolution) {
+      payload.resolution = payload.imageSize;
+    }
+    if (type.includes('video') && isTierSizeModel(type, model, caps) && payload.imageSize) {
+      payload.resolution = deriveResolutionFromTierAndAspectRatio(payload.imageSize, payload.aspectRatio || caps.defaultAspectRatio);
+    }
   }
   if (!hasExplicitSizeCapability(caps)) {
     delete payload.resolution;
@@ -6178,14 +6220,39 @@ function getCreatePayload() {
   if (payload.imageSize && caps.imageSizeOptions?.length && !caps.imageSizeOptions.includes(payload.imageSize)) {
     throw new Error(`尺寸档位仅支持 ${caps.imageSizeOptions.join('/')}`);
   }
-  if (payload.aspectRatio && caps.aspectRatioOptions?.length && !caps.aspectRatioOptions.includes(payload.aspectRatio)) {
+  if (
+    payload.aspectRatio
+    && caps.aspectRatioOptions?.length
+    && !caps.aspectRatioOptions.includes(payload.aspectRatio)
+    && !(isVeo31Video && isAspectRatioWithinRange(payload.aspectRatio, { min: 1 / 8, max: 8 }))
+  ) {
     throw new Error(`画幅比例仅支持 ${caps.aspectRatioOptions.join('/')}`);
+  }
+  if (isVeo31Video) {
+    const normalizedTier = normalizeVeoImageSizeKeyword(payload.imageSize || payload.resolution);
+    if (modelId.includes('pro-4k')) {
+      if (!normalizedTier) payload.imageSize = '4K';
+      else if (normalizedTier !== '4K') throw new Error(`[Compatibility Engine] 模型 ${payload.model} 仅支持 4K 分辨率档位。`);
+    }
+    if (modelId.includes('fast') && normalizedTier && !['1K', '2K'].includes(normalizedTier)) {
+      throw new Error(`[Compatibility Engine] 模型 ${payload.model} 仅支持 1K/2K 分辨率档位。`);
+    }
+    if (normalizedTier && !['512px', '1K', '2K', '4K'].includes(normalizedTier)) {
+      throw new Error('[Compatibility Engine] Veo 3.1 仅支持 512px、1K、2K、4K 分辨率档位。');
+    }
+    if (payload.aspectRatio && !isAspectRatioWithinRange(payload.aspectRatio, { min: 1 / 8, max: 8 })) {
+      throw new Error(`[Compatibility Engine] 画幅比例 ${payload.aspectRatio} 超出 Veo 3.1 支持范围（1:8 ~ 8:1）。`);
+    }
+    if (normalizedTier) payload.imageSize = normalizedTier;
+    if (normalizeVeoImageSizeKeyword(payload.resolution) && !/^\d{3,5}x\d{3,5}$/i.test(payload.resolution)) {
+      delete payload.resolution;
+    }
   }
   if (payload.resolution && payload.aspectRatio && !resolutionMatchesAspectRatio(payload.resolution, payload.aspectRatio)) {
     throw new Error(`当前分辨率 ${payload.resolution} 与画幅比例 ${payload.aspectRatio} 不匹配。`);
   }
 
-  if (type.includes('video') && isTierSizeModel(type, model, caps) && !payload.resolution) {
+  if (type.includes('video') && isTierSizeModel(type, model, caps) && !payload.resolution && !payload.imageSize) {
     throw new Error('当前模型使用尺寸档位，请先选择尺寸档位和画幅比例');
   }
 
@@ -6219,8 +6286,72 @@ function getCreatePayload() {
   return payload;
 }
 
+function describeFrameCandidate(value, sourceLabel) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  return {
+    source: sourceLabel,
+    value: text.length > 120 ? `${text.slice(0, 117)}...` : text
+  };
+}
+
+function buildVeo31SubmitPreview(payload = {}) {
+  const modelId = String(payload.model || '').trim().toLowerCase();
+  if (payload.type !== 'image_to_video' || !isVeo31ModelId(modelId)) return null;
+
+  const candidates = [];
+  const push = (value, sourceLabel) => {
+    const item = describeFrameCandidate(value, sourceLabel);
+    if (!item) return;
+    if (!candidates.some((entry) => entry.value === item.value)) candidates.push(item);
+  };
+
+  push(payload.sourceImageUrl, 'sourceImageUrl');
+  push(payload.sourceAssetId ? `asset:${payload.sourceAssetId}` : '', 'sourceAssetId');
+  push(payload.referenceImageUrl, 'referenceImageUrl');
+  (Array.isArray(payload.referenceImageUrls) ? payload.referenceImageUrls : []).forEach((item) => push(item, 'referenceImageUrls'));
+  push(payload.referenceAssetId ? `asset:${payload.referenceAssetId}` : '', 'referenceAssetId');
+  (Array.isArray(payload.referenceAssetIds) ? payload.referenceAssetIds : []).forEach((item) => push(item ? `asset:${item}` : '', 'referenceAssetIds'));
+
+  const first = candidates[0] || null;
+  const explicitLast = describeFrameCandidate(
+    payload.endFrameImageUrl || (payload.endFrameAssetId ? `asset:${payload.endFrameAssetId}` : ''),
+    payload.endFrameImageUrl ? 'endFrameImageUrl' : (payload.endFrameAssetId ? 'endFrameAssetId' : '')
+  );
+  const tail = candidates.length > 1 ? candidates[candidates.length - 1] : null;
+  const last = explicitLast || tail;
+
+  return {
+    stage: 'veo31_pre_submit_preview',
+    model: payload.model,
+    image_size: payload.imageSize || null,
+    aspect_ratio: payload.aspectRatio || null,
+    first_frame_candidate: first,
+    last_frame_candidate: (last && first && last.value === first.value) ? null : last,
+    candidate_count: candidates.length,
+    has_explicit_end_frame: Boolean(explicitLast)
+  };
+}
+
 async function submitTask() {
-  const payload = getCreatePayload();
+  let payload;
+  try {
+    payload = getCreatePayload();
+  } catch (error) {
+    if (!error.requestSummary) {
+      error.requestSummary = {
+        stage: 'client_validation',
+        type: String(els.typeSelect?.value || ''),
+        model: String(selectedModelIdForTask(String(els.typeSelect?.value || '')) || ''),
+        aspect_ratio: String(els.aspectRatio?.value || '').trim() || null,
+        resolution: String(els.resolutionInput?.value || '').trim() || null,
+        image_size: String(els.imageSize?.value || '').trim() || null
+      };
+    }
+    throw error;
+  }
+  const veoPreview = buildVeo31SubmitPreview(payload);
+  if (veoPreview) writeLog('VEO31_SUBMIT_PREVIEW', veoPreview);
   writeLog('TASK_SUBMIT', { type: payload.type, model: payload.model, studioTaskId: payload.studioTaskId || null });
   const task = await api('/api/v1/tasks', {
     method: 'POST',
@@ -6717,6 +6848,11 @@ function bindEvents() {
         setStatus('任务已提交，正在队列中处理。');
       })
       .catch((error) => {
+        writeLog('TASK_SUBMIT_ERROR', {
+          message: error.message,
+          code: error.code || null,
+          requestSummary: error.requestSummary || null
+        });
         const message = normalizeUserErrorMessage(error, '任务提交失败，请检查必填项和模型配置。');
         setSubmitStatus(message, true);
         setStatus('任务提交失败');

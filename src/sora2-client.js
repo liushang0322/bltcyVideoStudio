@@ -30,6 +30,20 @@ const DEFAULT_RUNTIME_CONFIG = {
 };
 
 let runtimeConfig = { ...DEFAULT_RUNTIME_CONFIG };
+const DIRECT_PREFERRED_HOSTS = new Set(
+  String(process.env.DIRECT_PREFERRED_HOSTS || 'api.bltcy.ai,cdn.bltcy.ai,files.bltcy.ai')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean)
+);
+const DEFAULT_VIDEO_CREATE_TIMEOUT_SECONDS = envPositiveIntSeconds('VIDEO_CREATE_TIMEOUT_SECONDS', 180);
+const DEFAULT_IMAGE_TO_VIDEO_CREATE_TIMEOUT_SECONDS = envPositiveIntSeconds('IMAGE_TO_VIDEO_CREATE_TIMEOUT_SECONDS', 300);
+const MAX_VIDEO_CREATE_TIMEOUT_SECONDS = envPositiveIntSeconds('MAX_VIDEO_CREATE_TIMEOUT_SECONDS', 900);
+
+function envPositiveIntSeconds(name, fallback) {
+  const numeric = Number(process.env[name]);
+  return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : fallback;
+}
 
 function normalizePath(value) {
   if (typeof value !== 'string') return '';
@@ -90,22 +104,64 @@ function normalizeKlingFileValue(value) {
   return match ? match[2] : normalized;
 }
 
+function parseAspectRatioValue(value) {
+  const match = String(value || '').trim().match(/^(\d{1,2}):(\d{1,2})$/);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  return { width, height, value: width / height };
+}
+
+function isAspectRatioWithinRange(value, { min = 1 / 8, max = 8 } = {}) {
+  const parsed = parseAspectRatioValue(value);
+  if (!parsed) return true;
+  return parsed.value >= min && parsed.value <= max;
+}
+
+function normalizeVeoImageSizeKeyword(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (!normalized) return '';
+  if (normalized === '512' || normalized === '512PX') return '512px';
+  if (normalized === '1K' || normalized === '2K' || normalized === '4K') return normalized;
+  return '';
+}
+
+function isVeo31Model(modelId) {
+  return /^veo3\.1(?:$|[-_.])/i.test(String(modelId || '').trim());
+}
+
+function normalizeFrameBindingMode(value, fallback = 'compat') {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'strict' || raw === 'compat') return raw;
+  return fallback;
+}
+
+function buildStrictFrameBindingPrompt(prompt, { hasLastFrame = false } = {}) {
+  const base = String(prompt || '').trim();
+  const marker = '[FRAME_BINDING_STRICT]';
+  if (base.includes(marker)) return base;
+  const directives = [
+    marker,
+    'Treat the provided first_frame as a hard boundary keyframe.',
+    hasLastFrame
+      ? 'Treat the provided last_frame as a hard boundary keyframe for the final shot.'
+      : 'Keep the start frame locked to first_frame throughout subject identity and composition.',
+    'Do not replace subject identity, outfit, viewpoint, scene layout, or lighting logic.',
+    'Only generate physically plausible in-between motion.'
+  ].join(' ');
+  return base ? `${directives}\n\n${base}` : directives;
+}
+
 function resolutionMatchesAspectRatio(resolution, aspectRatio) {
   const match = String(resolution || '').trim().match(/^(\d{3,5})x(\d{3,5})$/i);
   if (!match) return true;
   const width = Number(match[1]);
   const height = Number(match[2]);
   if (!width || !height) return true;
-  switch (String(aspectRatio || '').trim()) {
-    case '16:9':
-      return width >= height;
-    case '9:16':
-      return height >= width;
-    case '1:1':
-      return width === height;
-    default:
-      return true;
-  }
+  const parsed = parseAspectRatioValue(aspectRatio);
+  if (!parsed) return true;
+  return Math.abs((width / height) - parsed.value) <= 0.05;
 }
 
 function flipResolutionIfNeeded(resolution, aspectRatio) {
@@ -302,6 +358,7 @@ function shouldBypassProxyForUrl(url) {
   try {
     const parsed = new URL(url);
     const hostname = String(parsed.hostname || '').trim().toLowerCase();
+    if (DIRECT_PREFERRED_HOSTS.has(hostname)) return true;
     return hostname === 'localhost'
       || hostname === '127.0.0.1'
       || hostname === '::1'
@@ -361,6 +418,15 @@ function makeNetworkError(url, reason) {
   return error;
 }
 
+function describeNetworkFailure(error) {
+  const message = String(error?.message || error || 'Unknown network error').trim();
+  const causeCode = String(error?.cause?.code || '').trim();
+  const causeMessage = String(error?.cause?.message || '').trim();
+  if (causeCode && causeMessage) return `${message}; cause=${causeCode}: ${causeMessage}`;
+  if (causeMessage) return `${message}; cause=${causeMessage}`;
+  return message || 'Unknown network error';
+}
+
 function makeHttpError(status, data) {
   const message = data?.error?.message || data?.message || `Upstream request failed: ${status || 'unknown'}`;
   const error = new Error(message);
@@ -372,12 +438,14 @@ function makeHttpError(status, data) {
   return error;
 }
 
-function summarizeVideoRequest(body, format) {
+function summarizeVideoRequest(body, format, extra = {}) {
   const inputReference = body?.input_reference;
   let inputReferenceType = null;
   if (typeof inputReference === 'string' && inputReference) inputReferenceType = 'string';
   else if (inputReference && typeof inputReference === 'object') inputReferenceType = 'object';
 
+  const timeoutSeconds = Number(extra.timeoutSeconds);
+  const timeoutRetryCount = Number(extra.timeoutRetryCount);
   return {
     endpoint: runtimeConfig.videoCreatePath,
     requestFormat: format,
@@ -393,7 +461,15 @@ function summarizeVideoRequest(body, format) {
     images_count: Array.isArray(body?.images) ? body.images.length : (body?.images ? 1 : 0),
     has_input_reference: inputReference !== undefined,
     input_reference_type: inputReferenceType,
+    has_first_frame: Boolean(body?.first_frame),
+    has_last_frame: Boolean(body?.last_frame),
     has_end_frame_image: Boolean(body?.end_frame_image),
+    frame_binding_mode: extra.frameBindingMode || null,
+    timeout_seconds: Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? Math.round(timeoutSeconds) : null,
+    timeout_retry_count: Number.isFinite(timeoutRetryCount) && timeoutRetryCount >= 0 ? Math.round(timeoutRetryCount) : 0,
+    frame_strategy: body?.first_frame
+      ? 'veo31_first_last'
+      : (body?.end_frame_image ? 'dedicated_field' : ((Array.isArray(body?.images) && body.images.length > 1) ? 'images_array' : 'none')),
     end_frame_strategy: body?.end_frame_image
       ? 'dedicated_field'
       : ((Array.isArray(body?.images) && body.images.length > 1) ? 'images_array' : 'none')
@@ -544,7 +620,21 @@ async function apiRequest(path, { method = 'GET', body, maxTime = 20 } = {}) {
       throw makeNetworkError(url, `Request timed out after ${maxTime}s`);
     }
     if (error.code === 'OPENAI_HTTP_ERROR') throw error;
-    throw makeNetworkError(url, error.message);
+    if (runtimeConfig.proxyUrl && !shouldBypassProxyForUrl(url)) {
+      const previousProxy = runtimeConfig.proxyUrl;
+      runtimeConfig.proxyUrl = '';
+      try {
+        return await apiRequest(path, { method, body, maxTime });
+      } catch (directError) {
+        throw makeNetworkError(
+          url,
+          `Proxy request failed (${describeNetworkFailure(error)}); direct retry failed (${describeNetworkFailure(directError)})`
+        );
+      } finally {
+        runtimeConfig.proxyUrl = previousProxy;
+      }
+    }
+    throw makeNetworkError(url, describeNetworkFailure(error));
   } finally {
     clearTimeout(timer);
   }
@@ -613,7 +703,21 @@ async function multipartRequest(path, fields, { maxTime = 60 } = {}) {
       throw makeNetworkError(url, `Request timed out after ${maxTime}s`);
     }
     if (error.code === 'OPENAI_HTTP_ERROR') throw error;
-    throw makeNetworkError(url, error.message);
+    if (runtimeConfig.proxyUrl && !shouldBypassProxyForUrl(url)) {
+      const previousProxy = runtimeConfig.proxyUrl;
+      runtimeConfig.proxyUrl = '';
+      try {
+        return await multipartRequest(path, fields, { maxTime });
+      } catch (directError) {
+        throw makeNetworkError(
+          url,
+          `Proxy request failed (${describeNetworkFailure(error)}); direct retry failed (${describeNetworkFailure(directError)})`
+        );
+      } finally {
+        runtimeConfig.proxyUrl = previousProxy;
+      }
+    }
+    throw makeNetworkError(url, describeNetworkFailure(error));
   } finally {
     clearTimeout(timer);
   }
@@ -881,6 +985,7 @@ export async function createVideoTask(payload) {
   const modelId = String(payload.model || '').trim().toLowerCase();
   const isKlingVideo = /^kling-video/.test(modelId);
   const isVeoVideo = /^veo/.test(modelId);
+  const isVeo31Video = isVeo31Model(modelId);
   const sizeField = String(taskCapability.sizeField || 'size');
   const resolutionValue = String(payload.size || payload.resolution || '').trim();
   const imageSizeValue = String(payload.image_size || '').trim();
@@ -904,7 +1009,10 @@ export async function createVideoTask(payload) {
   };
   let requestPath = runtimeConfig.videoCreatePath;
   let providerMeta = null;
-  let createTimeoutSeconds = 90;
+  let createTimeoutSeconds = payload.type === 'image_to_video'
+    ? DEFAULT_IMAGE_TO_VIDEO_CREATE_TIMEOUT_SECONDS
+    : DEFAULT_VIDEO_CREATE_TIMEOUT_SECONDS;
+  let timeoutRetryCount = 0;
   const defaultResolutionValue = String(taskCapability.defaultResolution || '').trim();
   const defaultImageSizeValue = String(taskCapability.defaultImageSize || '').trim();
   const supportedResolutionValues = Array.isArray(taskCapability.resolutionPresets)
@@ -934,6 +1042,38 @@ export async function createVideoTask(payload) {
     else if (hasResolutionCapability && (effectiveResolutionValue || defaultResolutionValue)) body.size = effectiveResolutionValue || defaultResolutionValue;
   }
 
+  if (isVeo31Video) {
+    const rawImageSize = normalizeVeoImageSizeKeyword(body.image_size || normalizedImageSizeValue || payload.image_size || payload.imageSize || '');
+    const fallbackImageSize = normalizeVeoImageSizeKeyword(body.size || payload.resolution || payload.size || '');
+    let selectedImageSize = rawImageSize || fallbackImageSize || '';
+    const requestFormatHint = runtimeConfig.videoRequestFormat === 'multipart' ? 'multipart' : 'json';
+    if (!selectedImageSize && String(modelId).includes('pro-4k')) selectedImageSize = '4K';
+    if (!selectedImageSize && String(modelId).includes('fast')) selectedImageSize = '1K';
+    if (String(modelId).includes('pro-4k') && selectedImageSize && selectedImageSize !== '4K') {
+      const validationError = new Error(`[Compatibility Engine] Model ${payload.model} requires image_size=4K.`);
+      validationError.code = 'VALIDATION_ERROR';
+      validationError.statusCode = 400;
+      validationError.requestSummary = summarizeVideoRequest(body, requestFormatHint);
+      throw validationError;
+    }
+    if (String(modelId).includes('fast') && selectedImageSize && !['1K', '2K'].includes(selectedImageSize)) {
+      const validationError = new Error(`[Compatibility Engine] Model ${payload.model} only supports image_size in [1K, 2K].`);
+      validationError.code = 'VALIDATION_ERROR';
+      validationError.statusCode = 400;
+      validationError.requestSummary = summarizeVideoRequest(body, requestFormatHint);
+      throw validationError;
+    }
+    if (aspectRatioValue && !isAspectRatioWithinRange(aspectRatioValue, { min: 1 / 8, max: 8 })) {
+      const validationError = new Error(`[Compatibility Engine] Aspect ratio ${aspectRatioValue} is out of Veo 3.1 supported range [1:8, 8:1].`);
+      validationError.code = 'VALIDATION_ERROR';
+      validationError.statusCode = 400;
+      validationError.requestSummary = summarizeVideoRequest(body, requestFormatHint);
+      throw validationError;
+    }
+    if (selectedImageSize && !body.image_size && sizeField === 'image_size') body.image_size = selectedImageSize;
+    if (sizeField === 'image_size' && body.size) delete body.size;
+  }
+
   if (payload.aspect_ratio && taskCapability.supportsAspectRatio !== false) body.aspect_ratio = payload.aspect_ratio;
   const durationOptions = Array.isArray(taskCapability.durationOptions) ? taskCapability.durationOptions : [];
   const hasExplicitDurationCapability = taskCapability.supportsDuration !== false
@@ -956,13 +1096,36 @@ export async function createVideoTask(payload) {
     .map((item) => String(item || '').trim())
     .filter(Boolean);
   const endFrameImage = payload.end_frame_image_data_url || payload.end_frame_image_url;
+  const estimatedUploadChars = [sourceImage, ...referenceImages, endFrameImage]
+    .map((item) => String(item || '').trim())
+    .filter((item) => item.startsWith('data:'))
+    .reduce((sum, item) => sum + item.length, 0);
+  if (payload.type === 'image_to_video') {
+    const estimatedUploadMegabytes = Math.ceil((estimatedUploadChars * 0.75) / (1024 * 1024));
+    const adaptiveExtraSeconds = Math.max(0, estimatedUploadMegabytes - 6) * 40;
+    createTimeoutSeconds = Math.min(
+      MAX_VIDEO_CREATE_TIMEOUT_SECONDS,
+      createTimeoutSeconds + adaptiveExtraSeconds
+    );
+  }
   const primaryImage = sourceImage || referenceImages[0] || '';
   const allInputImages = []
     .concat(sourceImage ? [sourceImage] : [])
     .concat(referenceImages)
     .filter(Boolean);
   const dedupedInputImages = dedupeImageValues(allInputImages);
-  const shouldUseImagesArray = payload.type === 'image_to_video' && Boolean(primaryImage);
+  const isVeo31ImageToVideo = isVeo31Video && payload.type === 'image_to_video';
+  if (isVeoVideo) {
+    createTimeoutSeconds = Math.max(createTimeoutSeconds, 180);
+  }
+  if (isVeo31ImageToVideo) {
+    createTimeoutSeconds = Math.max(createTimeoutSeconds, 300);
+  }
+  const frameBindingMode = isVeo31ImageToVideo
+    ? normalizeFrameBindingMode(payload.frame_binding_mode || payload.frameBindingMode, 'strict')
+    : normalizeFrameBindingMode(payload.frame_binding_mode || payload.frameBindingMode, 'compat');
+  const strictFrameBinding = isVeo31ImageToVideo && frameBindingMode === 'strict';
+  const shouldUseImagesArray = payload.type === 'image_to_video' && Boolean(primaryImage) && !isVeo31ImageToVideo;
   const prefersDedicatedEndFrameField = Boolean(
     payload.type === 'image_to_video'
     && shouldUseImagesArray
@@ -970,6 +1133,7 @@ export async function createVideoTask(payload) {
     && taskCapability.supportsEndFrame === true
     && endFrameImage
   );
+  let veo31FramePayload = null;
   const modelRequestFormat = taskCapability.requestFormat || catalogEntry?.capabilities?.requestFormat || '';
   const modelInputReferenceFormat = taskCapability.inputReferenceFormat || catalogEntry?.capabilities?.inputReferenceFormat || '';
   const shouldUseMultipart = (modelRequestFormat || runtimeConfig.videoRequestFormat) === 'multipart';
@@ -977,7 +1141,31 @@ export async function createVideoTask(payload) {
   const initialInputReferenceFormat = modelInputReferenceFormat || runtimeConfig.inputReferenceFormat;
   const alternateInputReferenceFormat = initialInputReferenceFormat === 'string' ? 'object' : 'string';
   const initialInputReference = buildInputReference(sourceImage, referenceImages, initialInputReferenceFormat);
-  if (shouldUseImagesArray) {
+  if (isVeo31ImageToVideo) {
+    const frameCandidates = dedupeImageValues([sourceImage, ...referenceImages].filter(Boolean));
+    const firstFrame = String(frameCandidates[0] || '').trim();
+    const explicitLastFrame = String(endFrameImage || '').trim();
+    const tailFromCandidates = frameCandidates.length > 1 ? String(frameCandidates[frameCandidates.length - 1] || '').trim() : '';
+    const lastFrame = explicitLastFrame || tailFromCandidates;
+
+    if (!firstFrame) {
+      const validationError = new Error('[Validation] Image-to-Video requires at least one source image.');
+      validationError.code = 'VALIDATION_ERROR';
+      validationError.statusCode = 400;
+      validationError.requestSummary = summarizeVideoRequest(body, shouldUseMultipart ? 'multipart' : 'json', { frameBindingMode });
+      throw validationError;
+    }
+
+    if (strictFrameBinding) {
+      body.prompt = buildStrictFrameBindingPrompt(body.prompt, { hasLastFrame: Boolean(lastFrame && lastFrame !== firstFrame) });
+    }
+    body.first_frame = firstFrame;
+    if (lastFrame && lastFrame !== firstFrame) body.last_frame = lastFrame;
+    delete body.images;
+    delete body.input_reference;
+    delete body.end_frame_image;
+    veo31FramePayload = { first: firstFrame, last: String(body.last_frame || '').trim() };
+  } else if (shouldUseImagesArray) {
     body.images = dedupedInputImages.length ? dedupedInputImages : [primaryImage];
     if (taskCapability.supportsEndFrame === true && endFrameImage && !prefersDedicatedEndFrameField) {
       const normalizedEndFrame = String(endFrameImage || '').trim();
@@ -988,7 +1176,7 @@ export async function createVideoTask(payload) {
       ? (taskCapability.supportsMultipleReferenceImages ? [sourceImage, ...referenceImages].filter(Boolean) : (sourceImage || referenceImages[0]))
       : initialInputReference;
   }
-  if ((prefersDedicatedEndFrameField || !shouldUseImagesArray) && taskCapability.supportsEndFrame !== false && endFrameImage) {
+  if (!isVeo31ImageToVideo && (prefersDedicatedEndFrameField || !shouldUseImagesArray) && taskCapability.supportsEndFrame !== false && endFrameImage) {
     body.end_frame_image = endFrameImage;
   }
 
@@ -1006,7 +1194,7 @@ export async function createVideoTask(payload) {
     delete body.size;
     delete body.image_size;
     delete body.seconds;
-    createTimeoutSeconds = payload.type === 'image_to_video' ? 240 : 180;
+    createTimeoutSeconds = Math.max(createTimeoutSeconds, payload.type === 'image_to_video' ? 240 : 180);
     if (requestedSeconds !== undefined && requestedSeconds !== null && requestedSeconds !== '') body.duration = String(requestedSeconds);
     if (payload.type === 'text_to_video') {
       requestPath = '/kling/v1/videos/text2video';
@@ -1052,7 +1240,13 @@ export async function createVideoTask(payload) {
           ? await multipartRequest(requestPath, body, { maxTime: createTimeoutSeconds })
           : await apiRequest(requestPath, { method: 'POST', body, maxTime: createTimeoutSeconds });
       } catch (error) {
-        if (!error.requestSummary) error.requestSummary = summarizeVideoRequest(body, format);
+        if (!error.requestSummary) {
+          error.requestSummary = summarizeVideoRequest(body, format, {
+            frameBindingMode,
+            timeoutSeconds: createTimeoutSeconds,
+            timeoutRetryCount
+          });
+        }
         throw error;
       }
     })()
@@ -1086,9 +1280,42 @@ export async function createVideoTask(payload) {
         || errorText.includes('cannot unmarshal object')
         || error.providerCode === 'invalid_json'
       );
+    const shouldRetryLegacyVeo31FrameShape = error.code === 'OPENAI_HTTP_ERROR'
+      && Boolean(veo31FramePayload?.first)
+      && (lowerErrorText.includes('first_frame') || lowerErrorText.includes('last_frame') || lowerErrorText.includes('unknown parameter'));
+    const shouldRetryTimeoutOnce = payload.type === 'image_to_video'
+      && timeoutRetryCount < 1
+      && error.code === 'UPSTREAM_NETWORK_UNREACHABLE'
+      && String(error.message || '').toLowerCase().includes('timed out');
 
+    if (shouldRetryTimeoutOnce) {
+      timeoutRetryCount += 1;
+      createTimeoutSeconds = Math.min(
+        MAX_VIDEO_CREATE_TIMEOUT_SECONDS,
+        Math.max(createTimeoutSeconds + 120, Math.ceil(createTimeoutSeconds * 1.8))
+      );
+      return normalizeProviderVideoTaskResponse(await requestWithFormat(shouldUseMultipart ? 'multipart' : 'json'), providerMeta);
+    }
     if (shouldRetryMultipart) {
       return normalizeProviderVideoTaskResponse(await requestWithFormat('multipart'), providerMeta);
+    }
+    if (shouldRetryLegacyVeo31FrameShape) {
+      if (strictFrameBinding) {
+        const strictError = new Error('[Frame Binding] Strict mode requires first_frame/last_frame. Upstream rejected these fields, so compatibility fallback is blocked.');
+        strictError.code = 'FRAME_BINDING_STRICT_UNSUPPORTED';
+        strictError.statusCode = 422;
+        strictError.requestSummary = summarizeVideoRequest(body, shouldUseMultipart ? 'multipart' : 'json', {
+          frameBindingMode,
+          timeoutSeconds: createTimeoutSeconds,
+          timeoutRetryCount
+        });
+        throw strictError;
+      }
+      delete body.first_frame;
+      delete body.last_frame;
+      body.images = [veo31FramePayload.first];
+      if (veo31FramePayload.last && !body.images.includes(veo31FramePayload.last)) body.images.push(veo31FramePayload.last);
+      return normalizeProviderVideoTaskResponse(await requestWithFormat(shouldUseMultipart ? 'multipart' : 'json'), providerMeta);
     }
     if (shouldRetryWithoutDedicatedEndFrame) {
       const normalizedEndFrame = String(body.end_frame_image || '').trim();

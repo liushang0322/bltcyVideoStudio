@@ -137,8 +137,11 @@ function taskTypeFromApiName(name) {
 
 function parseAspectRatioOptions(input) {
   const source = `${input || ''}`;
-  const ratios = source.match(/\b(?:21:9|16:9|9:16|4:3|3:4|1:1)\b/g) || [];
-  return [...new Set(ratios)];
+  const ratios = source.match(/\b\d{1,2}:\d{1,2}\b/g) || [];
+  return [...new Set(ratios.filter((item) => {
+    const [w, h] = String(item).split(':').map((part) => Number(part));
+    return Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 && w <= 32 && h <= 32;
+  }))];
 }
 
 function parseDurationOptions(input) {
@@ -168,6 +171,7 @@ function uniqueNumbers(values) {
 function parseImageSizeOptions(input) {
   const source = String(input || '').toUpperCase();
   const options = [];
+  if (/\b512(?:PX)?\b/.test(source)) options.push('512px');
   if (/\b1K\b/.test(source)) options.push('1K');
   if (/\b2K\b/.test(source) || /\bHD\b/.test(source)) options.push('2K');
   if (/\b4K\b/.test(source)) options.push('4K');
@@ -176,7 +180,7 @@ function parseImageSizeOptions(input) {
 
 function inferAspectRatioOptionsFromId(modelId) {
   const id = String(modelId || '');
-  return uniqueStrings((id.match(/(?:21:9|16:9|9:16|4:3|3:4|1:1)/g) || []));
+  return uniqueStrings((id.match(/(?:\d{1,2}:\d{1,2})/g) || []));
 }
 
 function inferDurationOptionsFromId(modelId) {
@@ -288,6 +292,7 @@ function inferTaskCapabilityFallback(model, apiRecords, taskType) {
   const aspectRatioOptions = uniqueStrings([
     ...parseAspectRatioOptions(text),
     ...inferAspectRatioOptionsFromId(modelId),
+    ...(isVideoTask && /^veo3\.1/.test(id) ? ['16:9', '9:16', '1:1', '4:3', '3:4', '1:4', '4:1', '1:8', '8:1'] : []),
     ...(isVideoTask && /(sora|veo|kling|seedance|wan|vidu|pixverse|hailuo|video)/.test(id) ? ['16:9', '9:16', '1:1'] : []),
     ...(isImageTask && (/(aspect_ratio|比例|ratio)/.test(lower) || /(banana|gpt-image|dall-e|seedream)/.test(id)) ? ['1:1', '16:9', '9:16', '4:3', '3:4'] : [])
   ]);

@@ -609,6 +609,34 @@ function mapError(error) {
   };
 }
 
+function summarizeValidationInput(input = {}) {
+  return {
+    stage: 'input_validation',
+    type: String(input.type || ''),
+    model: String(input.model || ''),
+    frame_binding_mode: String(input.frameBindingMode || input.frame_binding_mode || '').trim() || null,
+    image_size: String(input.imageSize || '').trim() || null,
+    resolution: String(input.resolution || '').trim() || null,
+    aspect_ratio: String(input.aspectRatio || '').trim() || null,
+    has_source_image: hasInputValue(input.sourceImageUrl) || hasInputValue(input.sourceAssetId),
+    has_end_frame_image: hasInputValue(input.endFrameImageUrl) || hasInputValue(input.endFrameAssetId)
+  };
+}
+
+function mapValidationError(validationError, input = {}) {
+  const message = typeof validationError === 'string'
+    ? validationError
+    : String(validationError?.message || 'Invalid request');
+  return {
+    error: message,
+    code: 'VALIDATION_ERROR',
+    details: typeof validationError === 'object' && validationError ? (validationError.details || null) : null,
+    requestSummary: typeof validationError === 'object' && validationError?.requestSummary
+      ? validationError.requestSummary
+      : summarizeValidationInput(input)
+  };
+}
+
 async function parseBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -808,26 +836,110 @@ function hasImageSizeCapability(caps) {
   );
 }
 
+function parseAspectRatioValue(value) {
+  const match = String(value || '').trim().match(/^(\d{1,2}):(\d{1,2})$/);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  return { width, height, value: width / height };
+}
+
+function isAspectRatioWithinRange(value, { min = 1 / 8, max = 8 } = {}) {
+  const parsed = parseAspectRatioValue(value);
+  if (!parsed) return true;
+  return parsed.value >= min && parsed.value <= max;
+}
+
+function isVeo31ModelId(modelId) {
+  return /^veo3\.1(?:$|[-_.])/i.test(String(modelId || '').trim());
+}
+
+function normalizeVeoImageSizeKeyword(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (!normalized) return '';
+  if (normalized === '512' || normalized === '512PX') return '512px';
+  if (normalized === '1K' || normalized === '2K' || normalized === '4K') return normalized;
+  return '';
+}
+
 function resolutionMatchesAspectRatio(resolution, aspectRatio) {
   const match = String(resolution || '').trim().match(/^(\d+)x(\d+)$/i);
   if (!match) return true;
   const width = Number(match[1]);
   const height = Number(match[2]);
   if (!width || !height) return true;
-  switch (String(aspectRatio || '').trim()) {
-    case '16:9':
-      return width >= height;
-    case '9:16':
-      return height >= width;
-    case '1:1':
-      return width === height;
-    case '4:3':
-      return width >= height;
-    case '3:4':
-      return height >= width;
-    default:
-      return true;
+  const parsed = parseAspectRatioValue(aspectRatio);
+  if (!parsed) return true;
+  return Math.abs((width / height) - parsed.value) <= 0.05;
+}
+
+function validateVeo31InputRules(input = {}) {
+  const modelId = String(input.model || '').trim().toLowerCase();
+  if (!isVeo31ModelId(modelId)) return null;
+
+  const normalizedImageSize = normalizeVeoImageSizeKeyword(input.imageSize || input.resolution || '');
+  if (normalizedImageSize && !['512px', '1K', '2K', '4K'].includes(normalizedImageSize)) {
+    return `model ${input.model} only supports image_size values: 512px, 1K, 2K, 4K`;
   }
+  if (modelId.includes('pro-4k') && normalizedImageSize && normalizedImageSize !== '4K') {
+    return `model ${input.model} requires image_size 4K`;
+  }
+  if (modelId.includes('fast') && normalizedImageSize && !['1K', '2K'].includes(normalizedImageSize)) {
+    return `model ${input.model} only supports image_size 1K or 2K`;
+  }
+  if (hasInputValue(input.aspectRatio) && !isAspectRatioWithinRange(input.aspectRatio, { min: 1 / 8, max: 8 })) {
+    return `aspect_ratio ${input.aspectRatio} is out of Veo3.1 supported range [1:8, 8:1]`;
+  }
+  return null;
+}
+
+function summarizeFrameValueForLog(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  if (text.startsWith('data:')) return `data_url(len=${text.length})`;
+  return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+}
+
+function buildVeo31PayloadPreview(payload = {}) {
+  const modelId = String(payload.model || '').trim().toLowerCase();
+  if (!isVeo31ModelId(modelId) || payload.type !== 'image_to_video') return null;
+
+  const sourceImage = payload.source_image_data_url || payload.source_image_url || '';
+  const references = collectDistinctInputValues(
+    payload.reference_image_data_url,
+    payload.reference_image_url,
+    payload.reference_image_data_urls || [],
+    payload.reference_image_urls || []
+  );
+  const candidates = collectDistinctInputValues(sourceImage, references);
+  const first = String(candidates[0] || '').trim();
+  const explicitLast = String(payload.end_frame_image_data_url || payload.end_frame_image_url || '').trim();
+  const tail = candidates.length > 1 ? String(candidates[candidates.length - 1] || '').trim() : '';
+  const last = explicitLast || tail;
+
+  return {
+    strategy: 'first_last',
+    frame_binding_mode: String(payload.frame_binding_mode || '').trim() || 'strict',
+    has_first_frame: Boolean(first),
+    has_last_frame: Boolean(last && last !== first),
+    first_frame_preview: summarizeFrameValueForLog(first),
+    last_frame_preview: summarizeFrameValueForLog(last && last !== first ? last : ''),
+    first_frame_from: sourceImage ? 'source_image' : (references.length ? 'reference_image' : null),
+    last_frame_from: explicitLast ? 'end_frame_image' : (tail ? 'reference_tail' : null),
+    image_size: String(payload.image_size || '').trim() || null,
+    aspect_ratio: String(payload.aspect_ratio || '').trim() || null
+  };
+}
+
+function buildProviderPayloadPreview(payload = {}) {
+  const veo31 = buildVeo31PayloadPreview(payload);
+  if (!veo31) return null;
+  return {
+    model: String(payload.model || ''),
+    type: String(payload.type || ''),
+    veo31
+  };
 }
 
 function toEnumOptions(values = []) {
@@ -1200,6 +1312,12 @@ async function validateInput(input) {
     return `model ${input.model} supports at most ${taskCaps.maxReferenceImages} reference images`;
   }
   if (meta?.kind === 'video') {
+    const frameBindingMode = String(input.frameBindingMode || input.frame_binding_mode || '').trim();
+    if (frameBindingMode && !['strict', 'compat'].includes(frameBindingMode)) {
+      return 'frameBindingMode only supports strict or compat';
+    }
+    const veoValidationError = validateVeo31InputRules(input);
+    if (veoValidationError) return veoValidationError;
     if (taskCaps.promptMaxLength && input.prompt && String(input.prompt).length > taskCaps.promptMaxLength) {
       return `prompt is too long for model ${input.model}; keep it within ${taskCaps.promptMaxLength} characters`;
     }
@@ -1801,6 +1919,11 @@ async function buildTaskPayload(input) {
   const supportsReferenceImage = taskCaps.supportsImageToVideoReferenceImages === true || taskCaps.supportsTextToImageReferenceImages === true || taskCaps.supportsTextToVideoReferenceImages === true || taskCaps.supportsReferenceImage === true;
   const supportsMultipleReferenceImages = taskCaps.supportsMultipleReferenceImages === true;
   const supportsEndFrame = taskCaps.supportsImageToVideoEndFrame === true;
+  const isVeo31ImageToVideo = input.type === 'image_to_video' && isVeo31ModelId(input.model);
+  const requestedFrameBindingMode = String(input.frameBindingMode || input.frame_binding_mode || '').trim().toLowerCase();
+  const frameBindingMode = isVeo31ImageToVideo
+    ? (requestedFrameBindingMode === 'compat' ? 'compat' : 'strict')
+    : undefined;
   const primaryImageUrl = String(input.sourceImageUrl || '').trim();
   const primaryImageDataUrl = sourceImageDataUrl || '';
   const isImageToVideo = input.type === 'image_to_video';
@@ -1817,6 +1940,7 @@ async function buildTaskPayload(input) {
     negative_prompt: supportsNegativePrompt ? input.negativePrompt : undefined,
     provider_mode: taskCaps.supportsProviderMode ? input.providerMode : undefined,
     cfg_scale: taskCaps.supportsCfgScale ? input.cfgScale : undefined,
+    frame_binding_mode: frameBindingMode,
     seed: input.seed,
     model: input.model,
     n: input.n ?? input.imageCount,
@@ -2233,23 +2357,29 @@ const server = http.createServer(async (req, res) => {
       body = await parseBody(req);
       studioTaskId = String(body.studioTaskId || getActiveStudioTaskId() || '').trim() || null;
       const validationError = await validateInput(body);
-      if (validationError) return json(res, 400, { error: validationError, code: 'VALIDATION_ERROR' });
+      if (validationError) return json(res, 400, mapValidationError(validationError, body));
       payload = await buildTaskPayload(body);
+      const providerPayloadPreview = buildProviderPayloadPreview(payload);
       const providerResponse = payload.type.includes('video') ? await createVideoTask(payload) : await createImage(payload);
       const taskInput = {
         ...body,
         studioTaskId,
-        prompt: payload.prompt || body.prompt || ''
+        prompt: payload.prompt || body.prompt || '',
+        frameBindingMode: payload.frame_binding_mode || body.frameBindingMode || body.frame_binding_mode || undefined,
+        providerPayloadPreview: providerPayloadPreview || undefined
       };
       const task = mapLocalTask(randomUUID(), taskInput, providerResponse);
       await updateTaskCache(task);
       return json(res, 201, sanitizeTaskForClient(task));
     } catch (error) {
       if (body && payload) {
+        const providerPayloadPreview = buildProviderPayloadPreview(payload);
         const failedInput = {
           ...body,
           studioTaskId,
-          prompt: payload.prompt || body.prompt || ''
+          prompt: payload.prompt || body.prompt || '',
+          frameBindingMode: payload.frame_binding_mode || body.frameBindingMode || body.frame_binding_mode || undefined,
+          providerPayloadPreview: providerPayloadPreview || undefined
         };
         const failedTask = mapFailedTask(randomUUID(), failedInput, error);
         await updateTaskCache(failedTask);
@@ -2393,23 +2523,29 @@ const server = http.createServer(async (req, res) => {
     let payload = null;
     try {
       const validationError = await validateInput(task.input || {});
-      if (validationError) return json(res, 400, { error: validationError, code: 'VALIDATION_ERROR' });
+      if (validationError) return json(res, 400, mapValidationError(validationError, task.input || {}));
       payload = await buildTaskPayload(task.input);
+      const providerPayloadPreview = buildProviderPayloadPreview(payload);
       const providerResponse = payload.type.includes('video') ? await createVideoTask(payload) : await createImage(payload);
       const retriedInput = {
         ...task.input,
         studioTaskId: task.studioTaskId || task.input?.studioTaskId || null,
-        prompt: payload.prompt || task.input.prompt || ''
+        prompt: payload.prompt || task.input.prompt || '',
+        frameBindingMode: payload.frame_binding_mode || task.input?.frameBindingMode || task.input?.frame_binding_mode || undefined,
+        providerPayloadPreview: providerPayloadPreview || undefined
       };
       const retried = mapLocalTask(randomUUID(), retriedInput, providerResponse);
       await updateTaskCache(retried);
       return json(res, 201, sanitizeTaskForClient(retried));
     } catch (error) {
       if (payload) {
+        const providerPayloadPreview = buildProviderPayloadPreview(payload);
         const failedRetryInput = {
           ...task.input,
           studioTaskId: task.studioTaskId || task.input?.studioTaskId || null,
-          prompt: payload.prompt || task.input?.prompt || ''
+          prompt: payload.prompt || task.input?.prompt || '',
+          frameBindingMode: payload.frame_binding_mode || task.input?.frameBindingMode || task.input?.frame_binding_mode || undefined,
+          providerPayloadPreview: providerPayloadPreview || undefined
         };
         const failedRetry = mapFailedTask(randomUUID(), failedRetryInput, error);
         await updateTaskCache(failedRetry);
