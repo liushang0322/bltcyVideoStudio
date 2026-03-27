@@ -5152,6 +5152,45 @@ function hasTaskEndFrame(input = {}) {
   );
 }
 
+function getTaskFrameBindingAnalysis(task) {
+  const input = task?.input || {};
+  const analysis = input.frameBindingAnalysis;
+  if (analysis && typeof analysis === 'object') return analysis;
+  const veo31 = input.providerPayloadPreview?.veo31;
+  if (!veo31) return null;
+  const risk = String(veo31.drift_risk || '').trim().toLowerCase();
+  if (!risk) return null;
+  return {
+    driftRisk: risk,
+    riskScore: Number(veo31.risk_score || 0) || 0,
+    flags: Array.isArray(veo31.risk_flags) ? veo31.risk_flags.map((code) => ({ code })) : [],
+    recommendedShotCount: risk === 'high' ? 3 : risk === 'medium' ? 2 : 1,
+    usesPhaseLockedGuard: true
+  };
+}
+
+function getFrameBindingRiskTone(analysis) {
+  const risk = String(analysis?.driftRisk || '').trim().toLowerCase();
+  if (risk === 'high') return 'High Drift Risk';
+  if (risk === 'medium') return 'Medium Drift Risk';
+  if (risk === 'low') return 'Low Drift Risk';
+  return '';
+}
+
+function summarizeFrameBindingFlags(analysis) {
+  const flags = Array.isArray(analysis?.flags)
+    ? analysis.flags.map((flag) => String(flag?.code || '').trim()).filter(Boolean)
+    : [];
+  const labels = [];
+  if (flags.includes('shot_jump_wide_to_closeup')) labels.push('wide-to-closeup jump');
+  if (flags.includes('aggressive_push_to_closeup')) labels.push('aggressive push-in');
+  if (flags.includes('lighting_rewrite')) labels.push('lighting rewrite');
+  if (flags.includes('style_override')) labels.push('style override');
+  if (flags.includes('filename_anchor_prompt')) labels.push('filename anchors');
+  if (flags.includes('dual_boundary_sequence_rewrite')) labels.push('boundary competition');
+  return labels.slice(0, 3);
+}
+
 function getTaskVisualSubmissionSummary(task) {
   const input = task?.input || {};
   const taskType = String(task?.type || '').trim();
@@ -5163,24 +5202,27 @@ function getTaskVisualSubmissionSummary(task) {
   const referenceCount = countTaskInputReferences(input);
   const primaryReady = hasTaskPrimaryImage(input);
   const endFrameReady = hasTaskEndFrame(input);
+  const frameBindingAnalysis = getTaskFrameBindingAnalysis(task);
   const parts = [];
 
   if (taskType === 'image_to_video') {
     parts.push(`${family}`);
     if (isVeo31ModelId(modelId) && (frameBindingMode === 'strict' || !frameBindingMode)) {
-      parts.push('首尾帧强绑定');
+      parts.push('Strict frame binding');
     }
-    parts.push(primaryReady ? '第 1 张已提交' : '缺第 1 张');
+    parts.push(primaryReady ? 'first frame ready' : 'missing first frame');
     if (caps.supportsImageToVideoReferenceImages) {
-      parts.push(referenceCount ? `参考图 ${referenceCount} 张` : '无参考图');
+      parts.push(referenceCount ? `refs ${referenceCount}` : 'no refs');
     } else if (referenceCount) {
-      parts.push(`参考图 ${referenceCount} 张未提交`);
+      parts.push(`refs ${referenceCount} ignored`);
     }
     if (caps.supportsImageToVideoEndFrame) {
-      parts.push(endFrameReady ? '尾帧已提交' : '无尾帧');
+      parts.push(endFrameReady ? 'end frame ready' : 'no end frame');
     } else if (endFrameReady) {
-      parts.push('尾帧已填写（模型未生效）');
+      parts.push('end frame not supported');
     }
+    const riskTone = getFrameBindingRiskTone(frameBindingAnalysis);
+    if (riskTone) parts.push(riskTone);
     return parts.join(' / ');
   }
 
@@ -5188,22 +5230,22 @@ function getTaskVisualSubmissionSummary(task) {
     parts.push(`${family}`);
     parts.push('Prompt');
     if (caps.supportsTextToVideoReferenceImages) {
-      parts.push(referenceCount ? `参考图 ${referenceCount} 张` : '无参考图');
+      parts.push(referenceCount ? `refs ${referenceCount}` : 'no refs');
     } else if (referenceCount) {
-      parts.push(`参考图 ${referenceCount} 张未提交`);
+      parts.push(`refs ${referenceCount} ignored`);
     }
     return parts.join(' / ');
   }
 
   if (taskType === 'image_edit') {
-    parts.push(hasTaskPrimaryImage(input) ? '原图已提交' : '缺原图');
-    if (referenceCount) parts.push(`参考图 ${referenceCount} 张`);
+    parts.push(hasTaskPrimaryImage(input) ? 'source ready' : 'missing source');
+    if (referenceCount) parts.push(`refs ${referenceCount}`);
     return parts.join(' / ');
   }
 
   if (taskType === 'text_to_image') {
     parts.push('Prompt');
-    if (referenceCount) parts.push(`参考图 ${referenceCount} 张`);
+    if (referenceCount) parts.push(`refs ${referenceCount}`);
     return parts.join(' / ');
   }
 
@@ -5231,6 +5273,7 @@ function getTaskPreviewTags(task) {
   const referenceCount = countTaskInputReferences(input);
   const primaryReady = hasTaskPrimaryImage(input);
   const endFrameReady = hasTaskEndFrame(input);
+  const frameBindingAnalysis = getTaskFrameBindingAnalysis(task);
   const tags = [];
 
   if (taskType === 'text_to_video' || taskType === 'image_to_video') tags.push({ text: family });
@@ -5241,31 +5284,42 @@ function getTaskPreviewTags(task) {
 
   if (taskType === 'image_to_video') {
     if (isVeo31ModelId(modelId) && (frameBindingMode === 'strict' || !frameBindingMode)) {
-      tags.push({ text: '首尾帧强绑定' });
+      tags.push({ text: 'Strict binding' });
     }
-    tags.push({ text: primaryReady ? '首帧已提交' : '缺首帧', warning: !primaryReady });
+    if (frameBindingAnalysis?.usesPhaseLockedGuard) {
+      tags.push({ text: 'Phase-locked' });
+    }
+    const riskTone = getFrameBindingRiskTone(frameBindingAnalysis);
+    if (riskTone) {
+      tags.push({ text: riskTone, warning: riskTone !== 'Low Drift Risk' });
+    }
+    if (Number(frameBindingAnalysis?.recommendedShotCount || 1) > 1) {
+      tags.push({ text: `Split into ${frameBindingAnalysis.recommendedShotCount}`, warning: true });
+    }
+    summarizeFrameBindingFlags(frameBindingAnalysis).forEach((label) => tags.push({ text: label, warning: true }));
+    tags.push({ text: primaryReady ? 'first frame ready' : 'missing first frame', warning: !primaryReady });
     if (caps.supportsImageToVideoReferenceImages) {
-      tags.push({ text: referenceCount ? `参考图 ${referenceCount} 张` : '无参考图' });
+      tags.push({ text: referenceCount ? `refs ${referenceCount}` : 'no refs' });
     } else if (referenceCount) {
-      tags.push({ text: `参考图 ${referenceCount} 张未提交`, warning: true });
+      tags.push({ text: `refs ${referenceCount} ignored`, warning: true });
     }
     if (caps.supportsImageToVideoEndFrame) {
-      tags.push({ text: endFrameReady ? '尾帧已提交' : '无尾帧' });
+      tags.push({ text: endFrameReady ? 'end frame ready' : 'no end frame' });
     } else if (endFrameReady) {
-      tags.push({ text: '尾帧已填写（模型未生效）', warning: true });
+      tags.push({ text: 'end frame ignored', warning: true });
     }
   } else if (taskType === 'text_to_video') {
     if (caps.supportsTextToVideoReferenceImages) {
-      tags.push({ text: referenceCount ? `参考图 ${referenceCount} 张` : '无参考图' });
+      tags.push({ text: referenceCount ? `refs ${referenceCount}` : 'no refs' });
     } else if (referenceCount) {
-      tags.push({ text: `参考图 ${referenceCount} 张未提交`, warning: true });
+      tags.push({ text: `refs ${referenceCount} ignored`, warning: true });
     }
   } else if (taskType === 'image_edit') {
-    tags.push({ text: hasTaskPrimaryImage(input) ? '原图已提交' : '缺原图', warning: !hasTaskPrimaryImage(input) });
-    if (referenceCount) tags.push({ text: `参考图 ${referenceCount} 张` });
+    tags.push({ text: hasTaskPrimaryImage(input) ? 'source ready' : 'missing source', warning: !hasTaskPrimaryImage(input) });
+    if (referenceCount) tags.push({ text: `refs ${referenceCount}` });
   } else if (taskType === 'text_to_image') {
     tags.push({ text: 'Prompt' });
-    if (referenceCount) tags.push({ text: `参考图 ${referenceCount} 张` });
+    if (referenceCount) tags.push({ text: `refs ${referenceCount}` });
   }
 
   return tags.slice(0, 8);
@@ -5574,11 +5628,18 @@ function renderPreview(task) {
   const visualSummary = getTaskVisualSubmissionSummary(task);
   const parameterSummary = getTaskParameterSummary(task);
   const previewTags = getTaskPreviewTags(task);
+  const frameBindingAnalysis = getTaskFrameBindingAnalysis(task);
   const previewLines = [
     `任务类型：${getTaskLabel(task.type)} | 状态：${status} | 模型：${model}`
   ];
   if (visualSummary) previewLines.push(`输入：${visualSummary}`);
   if (parameterSummary) previewLines.push(`参数：${parameterSummary}`);
+  if (frameBindingAnalysis) {
+    const riskTone = getFrameBindingRiskTone(frameBindingAnalysis);
+    const factors = summarizeFrameBindingFlags(frameBindingAnalysis);
+    const suffix = factors.length ? ` (${factors.join(' / ')})` : '';
+    if (riskTone) previewLines.push(`Binding diagnosis: ${riskTone}${suffix}`);
+  }
   els.previewMeta.textContent = previewLines.join('\n');
   if (els.previewTags) {
     els.previewTags.innerHTML = previewTags

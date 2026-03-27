@@ -901,7 +901,111 @@ function summarizeFrameValueForLog(value) {
   return text.length > 120 ? `${text.slice(0, 117)}...` : text;
 }
 
-function buildVeo31PayloadPreview(payload = {}) {
+function compactPromptText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function createFrameBindingRiskFlag(code, weight, detail) {
+  return { code, weight, detail };
+}
+
+function analyzeVeo31FrameBindingInput(input = {}) {
+  const modelId = String(input.model || '').trim().toLowerCase();
+  if (String(input.type || '').trim() !== 'image_to_video' || !isVeo31ModelId(modelId)) return null;
+
+  const prompt = compactPromptText(input.promptOriginal || input.prompt || '');
+  const hasEndFrame = hasInputValue(input.endFrameImageUrl) || hasInputValue(input.endFrameAssetId);
+  const flags = [];
+  const pushFlag = (code, weight, detail) => flags.push(createFrameBindingRiskFlag(code, weight, detail));
+
+  const mentionsWideShot = /\b(wide shot|wide-angle|establishing shot|long shot|full scene|full body shot)\b/i.test(prompt);
+  const mentionsCloseUp = /\b(close-up|close up|tight close-up|tight close up|extreme close-up|portrait close-up)\b/i.test(prompt);
+  const mentionsAggressivePush = /\b(dolly-in|dolly in|push-in|push in|zoom in|rapid push|camera rush)\b/i.test(prompt);
+  const mentionsLightingRewrite = /\b(sunbeams?|god rays?|divine light|golden light|eye glow|glowing eyes?|explosion of light|brilliant light|dramatic lighting|relight|relighting|turbulent clouds?)\b/i.test(prompt);
+  const mentionsStyleRewrite = /\b(epic|cinematic|awakening|transformation|metamorphosis|dramatic|high-definition close-up|4k)\b/i.test(prompt);
+  const mentionsFilenameAnchors = /\b(first_frame|mid_frame|last_frame)\.(?:jpg|jpeg|png|webp)\b/i.test(prompt);
+  const mentionsSequenceLanguage = /\b(seamless transition|transitioning from|from the wide shot|to the tight|toward the close-up)\b/i.test(prompt);
+
+  if (mentionsWideShot && mentionsCloseUp) {
+    pushFlag('shot_jump_wide_to_closeup', 3, 'Prompt asks the model to jump from a wide shot to a close-up inside one generation.');
+  }
+  if (mentionsAggressivePush && mentionsCloseUp) {
+    pushFlag('aggressive_push_to_closeup', 2, 'Prompt combines push-in camera movement with a close-up target, which often causes early frame drift.');
+  }
+  if (mentionsLightingRewrite) {
+    pushFlag('lighting_rewrite', 2, 'Prompt asks for major relighting or glow effects that can override the first frame in the opening seconds.');
+  }
+  if (mentionsStyleRewrite) {
+    pushFlag('style_override', 1, 'Prompt includes strong cinematic/style rewrite terms beyond simple motion guidance.');
+  }
+  if (mentionsFilenameAnchors) {
+    pushFlag('filename_anchor_prompt', 1, 'Prompt refers to local filenames, which do not create stronger frame binding for Veo.');
+  }
+  if (mentionsSequenceLanguage && hasEndFrame) {
+    pushFlag('dual_boundary_sequence_rewrite', 2, 'Prompt explicitly describes a start-to-end transition while also supplying an end frame, increasing boundary competition.');
+  }
+
+  const score = flags.reduce((sum, flag) => sum + Number(flag.weight || 0), 0);
+  const driftRisk = score >= 6 ? 'high' : score >= 3 ? 'medium' : 'low';
+  const recommendations = [];
+  if (flags.some((flag) => flag.code === 'shot_jump_wide_to_closeup' || flag.code === 'aggressive_push_to_closeup')) {
+    recommendations.push('Split the shot into 2-3 stages instead of asking Veo to jump from wide shot to close-up in one pass.');
+  }
+  if (flags.some((flag) => flag.code === 'lighting_rewrite' || flag.code === 'style_override')) {
+    recommendations.push('Keep the first pass motion-only; move relighting and dramatic effects to a later shot or post step.');
+  }
+  if (flags.some((flag) => flag.code === 'filename_anchor_prompt')) {
+    recommendations.push('Describe desired motion in natural language instead of referencing first_frame.jpg / mid_frame.jpg filenames.');
+  }
+  if (!recommendations.length) {
+    recommendations.push('Keep the prompt focused on subtle motion and let the uploaded frames define identity, framing, and lighting.');
+  }
+
+  return {
+    driftRisk,
+    riskScore: score,
+    flags,
+    hasEndFrame,
+    usesPhaseLockedGuard: true,
+    recommendedShotCount: score >= 6 ? 3 : score >= 3 ? 2 : 1,
+    recommendations
+  };
+}
+
+function buildVeo31PhaseLockedPrompt(prompt, analysis = {}) {
+  const base = compactPromptText(prompt);
+  const marker = '[FRAME_BINDING_STRICT]';
+  if (base.includes(marker)) return base;
+
+  const directives = [
+    marker,
+    'Treat the uploaded first_frame as the exact opening composition and authoritative visual source.',
+    analysis.hasEndFrame
+      ? 'Treat the uploaded last_frame as the target boundary for the ending only; do not rush toward it in the opening frames.'
+      : 'Maintain the opening frame identity, framing, and lighting throughout the clip.',
+    'Use the text prompt as motion guidance only; do not redesign the character, outfit, scene layout, or baseline lighting.',
+    'Opening phase (first 20%): keep composition, crop, camera distance, subject pose, and lighting aligned with first_frame; allow only subtle natural motion.',
+    'Middle phase (next 60%): introduce gradual, physically plausible motion and camera movement without abrupt recropping.',
+    analysis.hasEndFrame
+      ? 'Ending phase (final 20%): converge smoothly toward last_frame without sudden jumps, early close-up transitions, or identity drift.'
+      : 'Ending phase: preserve continuity and avoid abrupt reframing or identity drift.'
+  ];
+
+  if ((analysis.flags || []).some((flag) => flag.code === 'shot_jump_wide_to_closeup' || flag.code === 'aggressive_push_to_closeup')) {
+    directives.push('Do not begin with a close-up or fast push-in when the first_frame is a wider shot.');
+  }
+  if ((analysis.flags || []).some((flag) => flag.code === 'lighting_rewrite')) {
+    directives.push('Do not relight the opening shot, trigger eye glow, or introduce dramatic effects before the scene has naturally progressed.');
+  }
+  if ((analysis.flags || []).some((flag) => flag.code === 'filename_anchor_prompt')) {
+    directives.push('Ignore filename mentions such as first_frame.jpg or mid_frame.jpg; follow the uploaded frames themselves.');
+  }
+
+  const rewritten = directives.join(' ');
+  return base ? `${rewritten}\n\nOriginal motion brief: ${base}` : rewritten;
+}
+
+function buildVeo31PayloadPreview(payload = {}, analysis = null) {
   const modelId = String(payload.model || '').trim().toLowerCase();
   if (!isVeo31ModelId(modelId) || payload.type !== 'image_to_video') return null;
 
@@ -928,12 +1032,15 @@ function buildVeo31PayloadPreview(payload = {}) {
     first_frame_from: sourceImage ? 'source_image' : (references.length ? 'reference_image' : null),
     last_frame_from: explicitLast ? 'end_frame_image' : (tail ? 'reference_tail' : null),
     image_size: String(payload.image_size || '').trim() || null,
-    aspect_ratio: String(payload.aspect_ratio || '').trim() || null
+    aspect_ratio: String(payload.aspect_ratio || '').trim() || null,
+    drift_risk: analysis?.driftRisk || null,
+    risk_score: Number.isFinite(Number(analysis?.riskScore)) ? Number(analysis.riskScore) : null,
+    risk_flags: Array.isArray(analysis?.flags) ? analysis.flags.map((flag) => flag.code) : []
   };
 }
 
-function buildProviderPayloadPreview(payload = {}) {
-  const veo31 = buildVeo31PayloadPreview(payload);
+function buildProviderPayloadPreview(payload = {}, analysis = null) {
+  const veo31 = buildVeo31PayloadPreview(payload, analysis);
   if (!veo31) return null;
   return {
     model: String(payload.model || ''),
@@ -1409,7 +1516,7 @@ function updateTaskCache(task) {
 }
 
 function composeEffectivePrompt(input) {
-  const basePrompt = String(input.prompt || '').trim();
+  const basePrompt = String(input.promptOriginal || input.prompt || '').trim();
   const storyboardMode = String(input.videoGenerationMode || '').trim() === 'storyboard';
   const intelligentMode = String(input.videoGenerationMode || '').trim() === 'intelligent';
   const storyboardText = String(input.storyboardText || '').trim();
@@ -1429,11 +1536,26 @@ function composeEffectivePrompt(input) {
       structuredLines: []
     };
   }
+  const veo31Analysis = analyzeVeo31FrameBindingInput({
+    ...input,
+    prompt: basePrompt,
+    promptOriginal: basePrompt
+  });
+  if (veo31Analysis) {
+    return {
+      originalPrompt: basePrompt,
+      effectivePrompt: buildVeo31PhaseLockedPrompt(basePrompt, veo31Analysis),
+      promptControls: ['veo31_phase_locked_motion_guard'],
+      structuredLines: [],
+      frameBindingAnalysis: veo31Analysis
+    };
+  }
   return {
     originalPrompt: basePrompt,
     effectivePrompt: basePrompt,
     promptControls: [],
-    structuredLines: []
+    structuredLines: [],
+    frameBindingAnalysis: null
   };
 }
 
@@ -2353,19 +2475,27 @@ const server = http.createServer(async (req, res) => {
     let body = null;
     let studioTaskId = null;
     let payload = null;
+    let promptMeta = null;
+    let frameBindingAnalysis = null;
     try {
       body = await parseBody(req);
       studioTaskId = String(body.studioTaskId || getActiveStudioTaskId() || '').trim() || null;
       const validationError = await validateInput(body);
       if (validationError) return json(res, 400, mapValidationError(validationError, body));
+      promptMeta = composeEffectivePrompt(body);
+      frameBindingAnalysis = promptMeta.frameBindingAnalysis || analyzeVeo31FrameBindingInput(body);
       payload = await buildTaskPayload(body);
-      const providerPayloadPreview = buildProviderPayloadPreview(payload);
+      const providerPayloadPreview = buildProviderPayloadPreview(payload, frameBindingAnalysis);
       const providerResponse = payload.type.includes('video') ? await createVideoTask(payload) : await createImage(payload);
       const taskInput = {
         ...body,
         studioTaskId,
-        prompt: payload.prompt || body.prompt || '',
+        prompt: promptMeta.originalPrompt || body.prompt || '',
+        promptOriginal: promptMeta.originalPrompt || body.prompt || '',
+        promptEffective: payload.prompt || promptMeta.effectivePrompt || body.prompt || '',
+        promptControls: Array.isArray(promptMeta.promptControls) ? promptMeta.promptControls : [],
         frameBindingMode: payload.frame_binding_mode || body.frameBindingMode || body.frame_binding_mode || undefined,
+        frameBindingAnalysis: frameBindingAnalysis || undefined,
         providerPayloadPreview: providerPayloadPreview || undefined
       };
       const task = mapLocalTask(randomUUID(), taskInput, providerResponse);
@@ -2373,12 +2503,16 @@ const server = http.createServer(async (req, res) => {
       return json(res, 201, sanitizeTaskForClient(task));
     } catch (error) {
       if (body && payload) {
-        const providerPayloadPreview = buildProviderPayloadPreview(payload);
+        const providerPayloadPreview = buildProviderPayloadPreview(payload, frameBindingAnalysis);
         const failedInput = {
           ...body,
           studioTaskId,
-          prompt: payload.prompt || body.prompt || '',
+          prompt: promptMeta?.originalPrompt || body.prompt || '',
+          promptOriginal: promptMeta?.originalPrompt || body.prompt || '',
+          promptEffective: payload.prompt || promptMeta?.effectivePrompt || body.prompt || '',
+          promptControls: Array.isArray(promptMeta?.promptControls) ? promptMeta.promptControls : [],
           frameBindingMode: payload.frame_binding_mode || body.frameBindingMode || body.frame_binding_mode || undefined,
+          frameBindingAnalysis: frameBindingAnalysis || undefined,
           providerPayloadPreview: providerPayloadPreview || undefined
         };
         const failedTask = mapFailedTask(randomUUID(), failedInput, error);
@@ -2521,17 +2655,25 @@ const server = http.createServer(async (req, res) => {
     const task = tasks.get(retryMatch[1]) || getStoredTask(retryMatch[1]);
     if (!task) return json(res, 404, { error: 'Task not found', code: 'NOT_FOUND' });
     let payload = null;
+    let promptMeta = null;
+    let frameBindingAnalysis = null;
     try {
       const validationError = await validateInput(task.input || {});
       if (validationError) return json(res, 400, mapValidationError(validationError, task.input || {}));
+      promptMeta = composeEffectivePrompt(task.input || {});
+      frameBindingAnalysis = promptMeta.frameBindingAnalysis || analyzeVeo31FrameBindingInput(task.input || {});
       payload = await buildTaskPayload(task.input);
-      const providerPayloadPreview = buildProviderPayloadPreview(payload);
+      const providerPayloadPreview = buildProviderPayloadPreview(payload, frameBindingAnalysis);
       const providerResponse = payload.type.includes('video') ? await createVideoTask(payload) : await createImage(payload);
       const retriedInput = {
         ...task.input,
         studioTaskId: task.studioTaskId || task.input?.studioTaskId || null,
-        prompt: payload.prompt || task.input.prompt || '',
+        prompt: promptMeta?.originalPrompt || task.input.promptOriginal || task.input.prompt || '',
+        promptOriginal: promptMeta?.originalPrompt || task.input.promptOriginal || task.input.prompt || '',
+        promptEffective: payload.prompt || promptMeta?.effectivePrompt || task.input.promptEffective || task.input.prompt || '',
+        promptControls: Array.isArray(promptMeta?.promptControls) ? promptMeta.promptControls : (task.input?.promptControls || []),
         frameBindingMode: payload.frame_binding_mode || task.input?.frameBindingMode || task.input?.frame_binding_mode || undefined,
+        frameBindingAnalysis: frameBindingAnalysis || task.input?.frameBindingAnalysis || undefined,
         providerPayloadPreview: providerPayloadPreview || undefined
       };
       const retried = mapLocalTask(randomUUID(), retriedInput, providerResponse);
@@ -2539,12 +2681,16 @@ const server = http.createServer(async (req, res) => {
       return json(res, 201, sanitizeTaskForClient(retried));
     } catch (error) {
       if (payload) {
-        const providerPayloadPreview = buildProviderPayloadPreview(payload);
+        const providerPayloadPreview = buildProviderPayloadPreview(payload, frameBindingAnalysis);
         const failedRetryInput = {
           ...task.input,
           studioTaskId: task.studioTaskId || task.input?.studioTaskId || null,
-          prompt: payload.prompt || task.input?.prompt || '',
+          prompt: promptMeta?.originalPrompt || task.input?.promptOriginal || task.input?.prompt || '',
+          promptOriginal: promptMeta?.originalPrompt || task.input?.promptOriginal || task.input?.prompt || '',
+          promptEffective: payload.prompt || promptMeta?.effectivePrompt || task.input?.promptEffective || task.input?.prompt || '',
+          promptControls: Array.isArray(promptMeta?.promptControls) ? promptMeta.promptControls : (task.input?.promptControls || []),
           frameBindingMode: payload.frame_binding_mode || task.input?.frameBindingMode || task.input?.frame_binding_mode || undefined,
+          frameBindingAnalysis: frameBindingAnalysis || task.input?.frameBindingAnalysis || undefined,
           providerPayloadPreview: providerPayloadPreview || undefined
         };
         const failedRetry = mapFailedTask(randomUUID(), failedRetryInput, error);
